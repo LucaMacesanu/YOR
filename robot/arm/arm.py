@@ -79,7 +79,7 @@ class ArmNode:
 
             self.config.gravity_compensation = False
             self.config.gravity_comp_scale = gravity_comp_scale
-            self.config.gripper_on = True
+            self.config.gripper_on = False
 
             self.nero = NeroController(self.config)
             
@@ -241,8 +241,7 @@ class ArmNode:
             self.gripper.move_to_pos(int(gripper_target * (self.gripper_range) + self.close_gripper_value))
             
     def set_gripper(self, gripper_pos: float):
-        if self.nero:
-            self.nero.set_gripper(float(gripper_pos))
+        pass
 
     def set_gain(self, kp, kd):
         """
