@@ -53,7 +53,7 @@ class YOR():
         self,
         base_max_vel=np.array((1.0, 1.0, 1.57)),
         base_max_accel=np.array((1.0, 1.0, 1.57)),
-        no_arms: bool = False,  # default to True since Base is independent now
+        no_arms: bool = True,  # default to True since Base is independent now
     ):
         self._initialized = False
         self._zed_initialized = False
@@ -234,7 +234,7 @@ class YOR():
     # Left arm
     @require_initialization
     def set_left_joint_target(
-        self, joint_target: np.ndarray, gripper_target: float | None = None, preview_time: float = 0.1
+        self, joint_target: np.ndarray, gripper_target: float | None = None, preview_time: float = 1.0
     ):
         if self.no_arms:
             print("left arm disabled")
@@ -242,11 +242,18 @@ class YOR():
         self.left_arm.set_joint_target(joint_target, gripper_target, preview_time)
 
     @require_initialization
-    def set_left_ee_target(self, ee_target: mink.SE3, gripper_target: float | None = None, preview_time: float = 0.1):
+    def set_left_ee_target(self, ee_target: mink.SE3, gripper_target: float | None = None, preview_time: float = 0.3):
         if self.no_arms:
             print("left arm disabled")
             return
         self.left_arm.set_ee_target(ee_target, gripper_target, preview_time)
+
+    @require_initialization
+    def set_left_gripper(self, gripper_pos: float):
+        if self.no_arms:
+            print("left arm disabled")
+            return
+        self.left_arm.set_gripper(gripper_pos)
 
     @require_initialization
     def set_left_gain(self, kp: np.ndarray, kd: np.ndarray):
@@ -317,7 +324,7 @@ class YOR():
     # Right arm
     @require_initialization
     def set_right_joint_target(
-        self, joint_target: np.ndarray, gripper_target: float | None = None, preview_time: float = 0.1
+        self, joint_target: np.ndarray, gripper_target: float | None = None, preview_time: float = 1.0
     ):
         if self.no_arms:
             print("right arm disabled")
@@ -325,11 +332,18 @@ class YOR():
         self.right_arm.set_joint_target(joint_target, gripper_target, preview_time)
 
     @require_initialization
-    def set_right_ee_target(self, ee_target: mink.SE3, gripper_target: float | None = None, preview_time: float = 0.1):
+    def set_right_ee_target(self, ee_target: mink.SE3, gripper_target: float | None = None, preview_time: float = 0.3):
         if self.no_arms:
             print("right arm disabled")
             return
         self.right_arm.set_ee_target(ee_target, gripper_target, preview_time)
+
+    @require_initialization
+    def set_right_gripper(self, gripper_pos: float):
+        if self.no_arms:
+            print("right arm disabled")
+            return
+        self.right_arm.set_gripper(gripper_pos)
 
     @require_initialization
     def set_right_gain(self, kp: np.ndarray, kd: np.ndarray):

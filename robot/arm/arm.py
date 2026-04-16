@@ -54,10 +54,10 @@ class ArmNode:
             # Defines home position (originally in ControllerConfig)
             # UPDATED: Using a safe intermediate home based on current readouts to avoid J1 limits/issues
             self.home_position = (
-                [0.0, 1.32, -1.71, 1.31, 0.0, 0.0, 0.0] 
+                [1.71, 1.32, -1.71, 1.31, 0.0, 0.0, 0.0] 
                 # [1.57, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0] # Modified J1 from 1.38 to -1.38 to match current state sign
                 if is_left_arm
-                else [0.0, 1.32, 1.71, 1.31, 0.0, 0.0, 0.0]
+                else [-1.71, 1.32, 1.71, 1.31, 0.0, 0.0, 0.0]
             )
             
             self.config.home_position = self.home_position
@@ -79,6 +79,7 @@ class ArmNode:
 
             self.config.gravity_compensation = False
             self.config.gravity_comp_scale = gravity_comp_scale
+            self.config.gripper_on = True
 
             self.nero = NeroController(self.config)
             
@@ -239,6 +240,10 @@ class ArmNode:
         if gripper_target is not None and self.dynamixel_gripper:
             self.gripper.move_to_pos(int(gripper_target * (self.gripper_range) + self.close_gripper_value))
             
+    def set_gripper(self, gripper_pos: float):
+        if self.nero:
+            self.nero.set_gripper(float(gripper_pos))
+
     def set_gain(self, kp, kd):
         """
         Set Kp and Kd gains for the controller.

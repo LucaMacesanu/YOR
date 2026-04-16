@@ -84,7 +84,7 @@
                <geom mesh="Lift_Top" class="collision"/>
 
                <!-- Left Arm (7 DOF) - Nero structure with quaternions -->
-                <body name="left_arm_base_link" pos="-0.005 -0.125 0.0575" euler="1.5708 0 1.5708" childclass="nero" gravcomp="1">
+                <body name="left_arm_base_link" pos="-0.005 -0.125 0.0575" euler="1.5708 0 0" childclass="nero" gravcomp="1">
                   <inertial pos="-0.00963615 0.00016787 0.0448601" mass="0.77" diaginertia="0.0006669 0.00054501 0.00051509" />
                   <geom mesh="base_link" class="visual" material="light_medium_gray_mat"/>
                   <geom mesh="base_link" class="collision"/>
@@ -136,7 +136,7 @@
                                   <inertial pos="-0.01208 -0.00025 0.00032" mass="0.05" diaginertia="2.697e-05 4.311e-05 2.479e-05" />
                                   <geom mesh="stand_v2" euler="-1.57 0 -1.57" class="visual" material="gray_mat"/>
                                   <geom mesh="stand_v2" euler="-1.57 0 -1.57" class="collision"/>
-                                  <site name="left_arm_ee" pos="0 0 0.1"/>
+                                  <site name="left_arm_ee" pos="0 0 0.0"/>
                                 </body>
                               </body>
                             </body>
@@ -148,7 +148,7 @@
                 </body>
 
                <!-- Right Arm (7 DOF) - Nero structure with quaternions -->
-                <body name="right_arm_base_link" pos="-0.005 0.125 0.0575" euler="-1.5708 0 4.7124" childclass="nero" gravcomp="1">
+                <body name="right_arm_base_link" pos="-0.005 0.125 0.0575" euler="-1.5708 0 0" childclass="nero" gravcomp="1">
                   <inertial pos="-0.00963615 0.00016787 0.0448601" mass="0.77" diaginertia="0.0006669 0.00054501 0.00051509" />
                   <geom mesh="base_link" class="visual" material="light_medium_gray_mat"/>
                   <geom mesh="base_link" class="collision"/>
@@ -200,7 +200,7 @@
                                   <inertial pos="-0.01208 -0.00025 0.00032" mass="0.05" diaginertia="2.697e-05 4.311e-05 2.479e-05" />
                                   <geom mesh="stand_v2" euler="-1.57 0 -1.57" class="visual" material="gray_mat"/>
                                   <geom mesh="stand_v2" euler="-1.57 0 -1.57" class="collision"/>
-                                  <site name="right_arm_ee" pos="0 0 0.1"/>
+                                  <site name="right_arm_ee" pos="0 0 0.0"/>
                                 </body>
                               </body>
                             </body>

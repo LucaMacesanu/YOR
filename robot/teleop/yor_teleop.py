@@ -6,7 +6,6 @@ import atexit
 import time
 import threading
 import os
-import cv2
 
 from loop_rate_limiters import RateLimiter
 import mink
@@ -22,7 +21,7 @@ def apply_deadzone(arr, deadzone_size=0.05):
 
 
 # VR Constants
-VR_TCP_HOST = "10.21.116.241"
+VR_TCP_HOST = "192.168.0.195"
 ZED_POSE_HOST = "194.168.1.11"
 VR_TCP_PORT = 5555
 VR_CONTROLLER_TOPIC = b"oculus_controller"
@@ -75,11 +74,6 @@ class YORAdvancedTeleop:
         except (ConnectionError, AttributeError, RuntimeError, Exception) as e:
             print(f"[YORTeleop] Warning: Could not home arms: {e}")
             self.has_arms = False
-
-        try:
-            self.yor.lift_home()
-        except Exception:
-            pass
 
         if self.zed_pose or self.zed_image:
             from robot.teleop.zed_reader import ZedSub
@@ -143,6 +137,7 @@ class YORAdvancedTeleop:
             with self.controller_state_lock:
                 controller_state = self.latest_controller_state
             if controller_state is None:
+                print("Waiting...")
                 rate.sleep()
                 continue
 
@@ -225,6 +220,12 @@ class YORAdvancedTeleop:
                     R_gripper_target=gripper_R,
                     R_preview_time=preview_time_R,
                 )
+
+            # --- Gripper control (direct, from index triggers) ---
+            if self.start_teleop_left:
+                self.yor.set_left_gripper(gripper_L)
+            if self.start_teleop_right:
+                self.yor.set_right_gripper(gripper_R)
 
             # --- Base control ---
             vy = -controller_state.right_thumbstick_axes[0]  # Right stick horizontal
