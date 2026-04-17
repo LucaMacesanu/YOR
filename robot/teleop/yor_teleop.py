@@ -221,12 +221,6 @@ class YORAdvancedTeleop:
                     R_preview_time=preview_time_R,
                 )
 
-            # --- Gripper control (direct, from index triggers) ---
-            if self.start_teleop_left:
-                self.yor.set_left_gripper(gripper_L)
-            if self.start_teleop_right:
-                self.yor.set_right_gripper(gripper_R)
-
             # --- Base control ---
             vy = -controller_state.right_thumbstick_axes[0]  # Right stick horizontal
             vx = controller_state.right_thumbstick_axes[1]   # Right stick vertical

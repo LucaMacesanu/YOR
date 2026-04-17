@@ -79,7 +79,7 @@ class ArmNode:
 
             self.config.gravity_compensation = False
             self.config.gravity_comp_scale = gravity_comp_scale
-            self.config.gripper_on = False
+            self.config.gripper_on = True
 
             self.nero = NeroController(self.config)
             
@@ -199,15 +199,14 @@ class ArmNode:
                 # We map joint_target to new_target_pos.
                 
                 target_pos = (joint_target + self.q_offset).tolist()
-                
-                # Nerolib expects normalized gripper position (0 for close, 1 for fully open)
+
                 target_gripper = 1.0
                 if gripper_target is not None:
                     target_gripper = float(gripper_target)
-                
+
                 self.nero.set_target(
                     new_target_pos=target_pos,
-                    new_target_gripper_pos=target_gripper if not self.dynamixel_gripper else 0.0, # Don't conflict if dyn gripper used
+                    new_target_gripper_pos=target_gripper,
                     minimum_duration=preview_time
                 )
                 
@@ -241,7 +240,8 @@ class ArmNode:
             self.gripper.move_to_pos(int(gripper_target * (self.gripper_range) + self.close_gripper_value))
             
     def set_gripper(self, gripper_pos: float):
-        pass
+        if self.nero:
+            self.nero.set_gripper(float(gripper_pos))
 
     def set_gain(self, kp, kd):
         """
