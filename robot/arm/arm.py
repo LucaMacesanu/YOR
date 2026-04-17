@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Optional
 import numpy as np
 import mink
+import can
 
 try:
     from nerolib import NeroController, ControllerConfig, JointState, Gain, ControlMode, MoveMode
@@ -218,19 +219,26 @@ class ArmNode:
 
     def open_gripper(self):
         if not self.dynamixel_gripper:
-            q = self.get_joint_positions()
-            self.set_joint_target(q, gripper_target=1.0)  
-            time.sleep(0.5)
+            self._raw_gripper_enable(False)
         else:
             self.gripper.move_to_pos(self.open_gripper_value)
 
     def close_gripper(self):
         if not self.dynamixel_gripper:
-            q = self.get_joint_positions()
-            self.set_joint_target(q, gripper_target=0.0)
-            time.sleep(0.5)
+            self._raw_gripper_enable(False)
+            time.sleep(0.15)
+            self._raw_gripper_enable(True)
         else:
             self.gripper.move_to_pos(self.close_gripper_value)
+
+    def _raw_gripper_enable(self, enable: bool):
+        """Send 0x471 motor-8 enable/disable directly while nerolib loop is live."""
+        try:
+            with can.interface.Bus(channel=self.can_port, interface='socketcan') as bus:
+                data = bytes([0x08, 0x02 if enable else 0x01, 0, 0, 0, 0, 0, 0])
+                bus.send(can.Message(arbitration_id=0x471, data=data, is_extended_id=False))
+        except Exception as e:
+            print(f"[ArmNode] raw gripper CAN send failed: {e}")
 
     def set_ee_target(self, ee_target: mink.SE3, gripper_target: Optional[float] = None, preview_time: float = 0.0):
         self.target = ee_target
@@ -382,6 +390,7 @@ if __name__ == "__main__":
         can_port="can_left",
         mjcf_path=(_HERE / "yor-description/nero-welded-base-and-lift.mjcf").as_posix(),
         is_left_arm=True,
+        dynamixel_gripper=False,
     )
     # right_arm = ArmNode(
     #     can_port="can_right",

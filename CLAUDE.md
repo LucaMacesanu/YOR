@@ -1,0 +1,96 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project Overview
+
+YOR is an open-source bimanual robot platform (NYU GRAIL) supporting MuJoCo simulation and physical robot control via CAN bus. It has a swerve-drive base, dual AgileX Nero arms, and grippers, with teleoperation via keyboard, gamepad, or VR.
+
+## Setup & Installation
+
+```bash
+# Clone with submodules
+git clone -b nero --recursive https://github.com/YOR-robot/YOR.git
+
+# Conda environment (required for physical robot hardware)
+conda create -n yor-nero python=3.10 -y
+conda activate yor-nero
+conda install -y -c conda-forge pinocchio spdlog catch2 boost pybind11 gxx cxx-compiler
+pip install scikit-build-core cmake ruckig
+
+# Build and install hardware driver submodules (Linux only)
+cd sparkcan_py && pip install . && cd ..
+cd nerolib && bash install.sh && cd ..
+
+# Install main package
+pip install -e .
+
+# Simulation-only (no hardware deps)
+uv sync && source .venv/bin/activate
+```
+
+## Running the Robot
+
+```bash
+# Simulation
+python robot/yor_mujoco.py
+
+# Physical robot
+python robot/yor.py
+
+# Teleoperation clients (connect to RPC server at :5557)
+python robot/teleop/telestick.py     # keyboard
+python robot/teleop/joystick.py      # gamepad
+python robot/teleop/yor_teleop.py    # VR/advanced
+
+# Automated tmux session (CAN setup + robot + teleop)
+./create_windows.sh
+```
+
+## Tests
+
+Tests are ad-hoc scripts, not pytest-structured:
+
+```bash
+python robot/test_gripper_can.py --can can_left
+python robot/test_gripper_pyagx.py
+python robot/test_left_compliant.py
+python robot/test_bimanual_keyboard_teleop.py
+python robot/arm/test_both_compliant.py
+
+# Nerolib unit tests
+python nerolib/test/test_nerolib_api.py
+python nerolib/nerolib/test/test_python_bindings.py
+```
+
+## Architecture
+
+### Communication Pattern
+All robot control uses a ZeroMQ RPC server on port 5557. Both simulation and physical robot expose the same interface, allowing teleoperation clients to work with either:
+
+```
+Teleoperation Client (telestick/joystick/yor_teleop)
+    ↓ commlink.RPCClient (:5557)
+robot/yor.py or robot/yor_mujoco.py (RPC Server)
+    ↓
+CAN Bus (physical) or MuJoCo physics (simulation)
+```
+
+### Key Components
+
+- **`robot/yor.py`** — Physical robot entry point. Composes `BaseController` + optional `ArmNode` instances. Accepts `no_arms` parameter for base-only operation.
+- **`robot/yor_mujoco.py`** — Simulation entry point. Runs MuJoCo at 10 Hz, exposes same RPC interface as physical robot. Uses `SingleArmIK` instances for inverse kinematics.
+- **`robot/base.py` / `robot/base_motor.py`** — Swerve drive base; 4 SparkFlex motors controlled via CAN bus (`sparkcan_py`).
+- **`robot/arm/arm.py`** — `ArmNode` wraps `nerolib` for Nero arm control. Supports MIT control mode (low-level PD) and joint control. Uses `mink` for IK and URDF-based gravity compensation.
+- **`robot/arm/gripper.py` / `dxl.py`** — Gripper interface; supports both Dynamixel servos and Nero-integrated grippers.
+- **`robot/teleop/`** — Teleoperation clients; rate-limited at ~30 Hz, send commands via `commlink`.
+- **`robot/nav/`** — Navigation helpers: path planning and viser visualization bridge. Optional deps: viser, opencv, scipy.
+
+### Submodules
+- **`sparkcan_py/`** — C++ pybind11 bindings for SparkFlex/SparkMax motors via socket CAN.
+- **`nerolib/`** — C++ library for AgileX Nero arm control with Python bindings; built via `install.sh`.
+
+### Hardware Notes
+- CAN interfaces are named `can0`, `can_left`, `can_right` — must be configured before running.
+- Hardware driver submodules (`sparkcan_py`, `nerolib`) only build on Linux.
+- ZED camera pose is subscribed to for base navigation when available.

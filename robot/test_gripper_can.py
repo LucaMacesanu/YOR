@@ -7,6 +7,7 @@ Commands:
   e       - enable gripper motor (0x471, motor index 8)
   d       - disable gripper motor (0x471, motor index 8) — may open gripper
   r       - reset gripper via 0x159 handshake (disable+clear then enable, like nerolib does)
+  z       - set zero / calibrate (PHYSICALLY CLOSE GRIPPER FIRST, then press z)
   o       - open gripper via 0x159
   c       - close gripper via 0x159
   j7o     - send MIT command to joint 7 (0x160) pos=+1.5 rad
@@ -96,6 +97,17 @@ def init_arm(bus):
     time.sleep(0.2)
 
 
+def decode_gripper_feedback(data: bytes) -> str:
+    if len(data) < 8:
+        return "too short"
+    pos_um = struct.unpack('>i', data[0:4])[0]
+    effort = struct.unpack('>H', data[4:6])[0]
+    status = data[6]
+    pos_m  = pos_um / 1e6
+    STATUS_NAMES = {0: "DISABLED/IDLE", 1: "ENABLED", 2: "CLEAR", 3: "ENABLED+CLEAR", 0xAE: "SET_ZERO"}
+    return f"pos={pos_m*1000:.2f}mm  effort={effort}  status=0x{status:02X}({STATUS_NAMES.get(status, '?')})"
+
+
 def listen(bus, duration=5.0):
     seen = {}
     deadline = time.time() + duration
@@ -105,8 +117,10 @@ def listen(bus, duration=5.0):
         if msg:
             if msg.arbitration_id not in seen:
                 seen[msg.arbitration_id] = msg
-                marker = " <-- GRIPPER FEEDBACK" if msg.arbitration_id == GRIPPER_FEEDBACK_ID else ""
-                print(f"  0x{msg.arbitration_id:03X}  {msg.data.hex()}{marker}")
+                if msg.arbitration_id == GRIPPER_FEEDBACK_ID:
+                    print(f"  0x{msg.arbitration_id:03X}  {msg.data.hex()}  <-- {decode_gripper_feedback(msg.data)}")
+                else:
+                    print(f"  0x{msg.arbitration_id:03X}  {msg.data.hex()}")
     print(f"Saw {len(seen)} unique CAN IDs")
 
 
@@ -141,7 +155,7 @@ def main():
         loop_running = True
         t = threading.Thread(target=gripper_loop, args=(bus,), daemon=True)
         t.start()
-        print("i=init  e=enable  d=disable  r=reset  o=open  c=close  l=listen  s=start_loop  x=stop_loop  q=quit")
+        print("i=init  e=enable  d=disable  r=reset  z=set_zero(calibrate)  o=open  c=close  l=listen  s=start_loop  x=stop_loop  q=quit")
         while True:
             key = input("> ").strip().lower()
             if key == 'i':
@@ -154,10 +168,24 @@ def main():
                 time.sleep(0.5)
                 listen(bus, duration=2.0)
             elif key == 'd':
-                bus.send(can.Message(arbitration_id=MOTOR_ENABLE_ID, data=make_enable_frame(False), is_extended_id=False))
-                print("Sent: DISABLE gripper motor (0x471, motor 8) — gripper may open")
+                gripper_target = None
+                for _ in range(10):
+                    bus.send(can.Message(arbitration_id=GRIPPER_CMD_ID, data=make_gripper_frame(0.0, effort=0.0, status_code=0), is_extended_id=False))
+                    time.sleep(0.005)
+                print("Sent: loop stopped + 0x159 status=0 (disable/width) x10 — gripper should go limp")
                 time.sleep(0.5)
                 listen(bus, duration=2.0)
+            elif key == 'z':
+                print("SET ZERO — make sure gripper is physically CLOSED before confirming.")
+                confirm = input("Gripper closed? Type 'yes' to send calibrate command: ").strip().lower()
+                if confirm == 'yes':
+                    # status_code=0xAE = set_zero/calibrate
+                    frame = make_gripper_frame(0.0, effort=0.0, status_code=0xAE)
+                    bus.send(can.Message(arbitration_id=GRIPPER_CMD_ID, data=frame, is_extended_id=False))
+                    print(f"Sent 0x159 set_zero (0xAE): {frame.hex()}")
+                    listen(bus, duration=2.0)
+                else:
+                    print("Cancelled.")
             elif key == 'r':
                 # Mirror nerolib's reset_gripper: disable+clear then enable via 0x159
                 print("Step 1: sending disable+clear (status_code=0x02)...")
@@ -168,12 +196,17 @@ def main():
                 listen(bus, duration=1.0)
                 print("Gripper reset done. Try 'o' to open.")
             elif key == 'o':
+                # Kick with status_code=3 (enable+clear) then switch loop to status_code=1
+                bus.send(can.Message(arbitration_id=GRIPPER_CMD_ID, data=make_gripper_frame(1.0, status_code=3), is_extended_id=False))
+                time.sleep(0.05)
                 gripper_target = 1.0
-                print("Loop target: OPEN (1.0) — sending continuously at 200Hz")
+                print("Loop target: OPEN (1.0) — sent status=3 kick, loop running at 200Hz")
                 listen(bus, duration=2.0)
             elif key == 'c':
+                bus.send(can.Message(arbitration_id=GRIPPER_CMD_ID, data=make_gripper_frame(0.0, status_code=3), is_extended_id=False))
+                time.sleep(0.05)
                 gripper_target = 0.0
-                print("Loop target: CLOSE (0.0) — sending continuously at 200Hz")
+                print("Loop target: CLOSE (0.0) — sent status=3 kick, loop running at 200Hz")
                 listen(bus, duration=2.0)
             elif key == 's':
                 gripper_target = 1.0
@@ -213,6 +246,10 @@ def main():
                 listen(bus)
             elif key == 'q':
                 loop_running = False
+                gripper_target = None
+                for _ in range(10):
+                    bus.send(can.Message(arbitration_id=GRIPPER_CMD_ID, data=make_gripper_frame(0.0, effort=0.0, status_code=0), is_extended_id=False))
+                    time.sleep(0.005)
                 break
 
 
