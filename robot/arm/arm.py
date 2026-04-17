@@ -4,7 +4,6 @@ from pathlib import Path
 from typing import Optional
 import numpy as np
 import mink
-import can
 
 try:
     from nerolib import NeroController, ControllerConfig, JointState, Gain, ControlMode, MoveMode
@@ -13,6 +12,7 @@ except ImportError:
     raise
 
 from robot.arm.gripper import Gripper
+from robot.arm.can_gripper import CanGripper
 from robot.arm.ik_solver import SingleArmIK
 
 # Dynamixel gripper caliberated in dxl.py
@@ -80,10 +80,10 @@ class ArmNode:
 
             self.config.gravity_compensation = False
             self.config.gravity_comp_scale = gravity_comp_scale
-            self.config.gripper_on = True
+            self.config.gripper_on = False  # CanGripper owns all 0x159 traffic
 
             self.nero = NeroController(self.config)
-            
+
             if not self.nero.start():
                  print(f"[ArmNode] Failed to start NeroController on {can_port}")
                  self.nero = None
@@ -130,6 +130,7 @@ class ArmNode:
 
         self.dynamixel_gripper = dynamixel_gripper
         self.gripper = None
+        self.can_gripper: CanGripper | None = None
 
         if self.dynamixel_gripper:
             # If your Gripper class uses /dev/ttyUSB0 internally, this will fail when unplugged.
@@ -149,6 +150,15 @@ class ArmNode:
                 print(f"[ArmNode] Dynamixel gripper not found ({e}). Continuing without gripper.")
                 self.dynamixel_gripper = False
                 self.gripper = None
+
+        if not self.dynamixel_gripper and self.nero is not None:
+            try:
+                self.can_gripper = CanGripper(can_port)
+                self.can_gripper.enable()
+                print(f"[ArmNode] CanGripper enabled on {can_port}")
+            except Exception as e:
+                print(f"[ArmNode] CanGripper init failed ({e}). Continuing without gripper.")
+                self.can_gripper = None
 
 
 
@@ -201,55 +211,43 @@ class ArmNode:
                 
                 target_pos = (joint_target + self.q_offset).tolist()
 
-                target_gripper = 1.0
-                if gripper_target is not None:
-                    target_gripper = float(gripper_target)
-
                 self.nero.set_target(
                     new_target_pos=target_pos,
-                    new_target_gripper_pos=target_gripper,
+                    new_target_gripper_pos=1.0,  # nerolib gripper_on=False; unused
                     minimum_duration=preview_time
                 )
-                
+
             except Exception as e:
                  print(f"Set target failed: {e}")
 
-        if gripper_target is not None and self.dynamixel_gripper:
-            self.gripper.move_to_pos(int(gripper_target * self.gripper_range + self.close_gripper_value))
+        if gripper_target is not None:
+            if self.dynamixel_gripper:
+                self.gripper.move_to_pos(int(gripper_target * self.gripper_range + self.close_gripper_value))
+            elif self.can_gripper:
+                self.can_gripper.set_position(float(gripper_target))
 
     def open_gripper(self):
-        if not self.dynamixel_gripper:
-            self._raw_gripper_enable(False)
-        else:
+        if self.dynamixel_gripper:
             self.gripper.move_to_pos(self.open_gripper_value)
+        elif self.can_gripper:
+            self.can_gripper.set_position(1.0)
 
     def close_gripper(self):
-        if not self.dynamixel_gripper:
-            self._raw_gripper_enable(False)
-            time.sleep(0.15)
-            self._raw_gripper_enable(True)
-        else:
+        if self.dynamixel_gripper:
             self.gripper.move_to_pos(self.close_gripper_value)
-
-    def _raw_gripper_enable(self, enable: bool):
-        """Send 0x471 motor-8 enable/disable directly while nerolib loop is live."""
-        try:
-            with can.interface.Bus(channel=self.can_port, interface='socketcan') as bus:
-                data = bytes([0x08, 0x02 if enable else 0x01, 0, 0, 0, 0, 0, 0])
-                bus.send(can.Message(arbitration_id=0x471, data=data, is_extended_id=False))
-        except Exception as e:
-            print(f"[ArmNode] raw gripper CAN send failed: {e}")
+        elif self.can_gripper:
+            self.can_gripper.set_position(0.0)
 
     def set_ee_target(self, ee_target: mink.SE3, gripper_target: Optional[float] = None, preview_time: float = 0.0):
         self.target = ee_target
         qd, _ = self.ik_solver.solve_ik(self.target)
         self.set_joint_target(qd, gripper_target, preview_time)
-        if gripper_target is not None and self.dynamixel_gripper:
-            self.gripper.move_to_pos(int(gripper_target * (self.gripper_range) + self.close_gripper_value))
             
     def set_gripper(self, gripper_pos: float):
-        if self.nero:
-            self.nero.set_gripper(float(gripper_pos))
+        if self.dynamixel_gripper:
+            self.gripper.move_to_pos(int(gripper_pos * self.gripper_range + self.close_gripper_value))
+        elif self.can_gripper:
+            self.can_gripper.set_position(float(gripper_pos))
 
     def set_gain(self, kp, kd):
         """
@@ -361,16 +359,12 @@ class ArmNode:
         return self.ik_solver.forward_kinematics()
 
     def get_gripper_pose(self):
-        if not self.dynamixel_gripper:
-            if self.nero:
-                state = self.nero.get_current_state()
-                return state.gripper_pos
-            return 0.0 
-        else:
+        if self.dynamixel_gripper:
             unnormalized_pos = self.gripper.dxl.get_present_position()
-            return float(unnormalized_pos - self.close_gripper_value) / float(
-                self.gripper_range
-            ) 
+            return float(unnormalized_pos - self.close_gripper_value) / float(self.gripper_range)
+        elif self.can_gripper:
+            return self.can_gripper.get_position()
+        return 0.0
 
     def update_joint_positions(self):
         q = self.get_joint_positions()
@@ -381,8 +375,11 @@ class ArmNode:
 
     def stop(self):
         print("called stop")
+        if self.can_gripper:
+            self.can_gripper.disable()
+            self.can_gripper = None
         if self.nero:
-             self.nero.stop()
+            self.nero.stop()
 
 if __name__ == "__main__":
     _HERE = Path(__file__).parent.parent

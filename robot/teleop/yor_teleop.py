@@ -188,7 +188,7 @@ class YORAdvancedTeleop:
                     time.sleep(0.01)
                     continue
                 x_Re_L = self._compute_ee_target(self.X_Cinit_left, self.X_ee_init_left, controller_state.left_SE3)
-                gripper_L = 1.0 if controller_state.left_index_trigger < 0.5 else 0.0
+                gripper_L = 1.0 - controller_state.left_index_trigger  # trigger 0=open, 1=closed
 
             if self.start_teleop_right:
                 if self.X_Cinit_right is None or self.X_ee_init_right is None:
@@ -196,7 +196,7 @@ class YORAdvancedTeleop:
                     time.sleep(0.01)
                     continue
                 x_Re_R = self._compute_ee_target(self.X_Cinit_right, self.X_ee_init_right, controller_state.right_SE3)
-                gripper_R = 1.0 if controller_state.right_index_trigger < 0.5 else 0.0
+                gripper_R = 1.0 - controller_state.right_index_trigger  # trigger 0=open, 1=closed
 
             # --- Send arm commands ---
             if self.start_teleop_left and not self.start_teleop_right:
