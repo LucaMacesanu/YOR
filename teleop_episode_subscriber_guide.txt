@@ -1,0 +1,65 @@
+YOR Teleop Episode Publisher — Subscriber Guide
+================================================
+
+Overview
+--------
+During teleoperation, yor_teleop.py publishes robot state and actions over TCP
+using ZeroMQ PUB/SUB. Press right thumbstick (click) on the Oculus controller
+to start/stop an episode. Each loop tick (~30 Hz) publishes one frame while an
+episode is active.
+
+Transport
+---------
+Host:    YOR robot IP
+Port:    5558
+Topic:   teleop/episode
+Library: commlink
+
+Install
+-------
+pip install commlink
+
+Message Schema
+--------------
+Each message is a Python dict:
+
+{
+    "timestamp":       float,       # time.time() on the robot
+
+    # State (actual)
+    "left_ee":         list[float], # [qw, qx, qy, qz, x, y, z]
+    "left_joints":     list[float], # [j0..j6]
+    "left_gripper":    float,       # 0.0 = closed, 1.0 = open
+    "right_ee":        list[float], # [qw, qx, qy, qz, x, y, z]
+    "right_joints":    list[float], # [j0..j6]
+    "right_gripper":   float,       # 0.0 = closed, 1.0 = open
+    "lift":            float,       # meters (0.0 on current hardware)
+
+    # Actions (commanded)
+    "left_ee_target":  list[float], # [qw, qx, qy, qz, x, y, z]; equals left_ee if arm not in teleop
+    "right_ee_target": list[float], # same convention
+    "base_vel":        list[float], # [vx, vy, omega] in robot frame (m/s, m/s, rad/s)
+    "lift_cmd":        int,         # -1 = down, 0 = stop, 1 = up
+}
+
+Example Subscriber
+------------------
+from commlink import Subscriber
+
+YOR_IP = "192.168.x.x"  # replace with YOR robot IP
+
+sub = Subscriber(YOR_IP, port=5558)
+sub.subscribe("teleop/episode")
+
+while True:
+    topic, frame = sub.receive()
+    print(f"t={frame['timestamp']:.3f}  left_gripper={frame['left_gripper']:.2f}  base_vel={frame['base_vel']}")
+
+Notes
+-----
+- The publisher is always bound on startup; no frames are sent until an episode is active.
+- Episode start/stop is indicated only by the presence or absence of messages —
+  there is no explicit start/stop message.
+- left_ee_target / right_ee_target fall back to the current actual pose when that
+  arm is not under VR control, so the action is always well-defined.
+- The existing CSV recording (left_menu) is independent and can run simultaneously.

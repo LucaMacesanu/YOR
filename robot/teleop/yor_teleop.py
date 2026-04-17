@@ -12,8 +12,11 @@ import mink
 
 from robot.teleop.oculus_msgs import parse_controller_state
 
-from commlink import RPCClient
+from commlink import RPCClient, Publisher
 import argparse
+
+EPISODE_PUB_PORT = 5558
+EPISODE_TOPIC = "teleop/episode"
 
 
 def apply_deadzone(arr, deadzone_size=0.05):
@@ -43,6 +46,7 @@ class YORAdvancedTeleop:
         self.start_base_lift_control = False
         self.data_list = []
         self.record_data = False
+        self.collect_episode = False
 
         # Coordinate transform: controller -> user facing frame
         self.H = mink.SE3.from_rotation(mink.SO3.from_matrix(np.array([[0, -1, 0], [0, 0, 1], [-1, 0, 0]])))
@@ -74,6 +78,9 @@ class YORAdvancedTeleop:
         except (ConnectionError, AttributeError, RuntimeError, Exception) as e:
             print(f"[YORTeleop] Warning: Could not home arms: {e}")
             self.has_arms = False
+
+        self.episode_publisher = Publisher("*", port=EPISODE_PUB_PORT)
+        print(f"[YORTeleop] Episode publisher on port {EPISODE_PUB_PORT}")
 
         if self.zed_pose or self.zed_image:
             from robot.teleop.zed_reader import ZedSub
@@ -178,6 +185,11 @@ class YORAdvancedTeleop:
                 self.start_teleop_right = False
                 time.sleep(BUTTON_DEBOUNCE_TIME)
 
+            if controller_state.right_thumbstick:
+                self.collect_episode = not self.collect_episode
+                print(f"[Episode] {'STARTED' if self.collect_episode else 'STOPPED'}")
+                time.sleep(BUTTON_DEBOUNCE_TIME)
+
             # --- Compute arm targets ---
             x_Re_L, gripper_L, preview_time_L = None, 0.0, 1 / 15
             x_Re_R, gripper_R, preview_time_R = None, 0.0, 1 / 15
@@ -253,10 +265,12 @@ class YORAdvancedTeleop:
             else:
                 target_velocity = np.zeros(3)
 
-            # --- Data recording ---
-            if self.record_data:
+            # --- Data recording / episode publishing ---
+            curr_pose = None
+            if self.record_data or self.collect_episode:
                 curr_pose = self.yor.get_bimanual_state()
-                # Assuming get_bimanual_state returns 32 items
+
+            if self.record_data:
                 # [0: time, 1:8 L_ee, 8:15 L_j, 15 L_grip, 16:23 R_ee, 23:30 R_j, 30 R_grip, 31 lift]
                 if self.start_teleop_left and x_Re_L is not None:
                     L_ee_target_list = x_Re_L.wxyz_xyz.tolist()
@@ -284,6 +298,23 @@ class YORAdvancedTeleop:
                     image, _ = self.pose_stream.get_image()
                     self.image_list.append(image)
                 self.data_list.append(record_row)
+
+            # --- Episode publishing ---
+            if self.collect_episode and curr_pose is not None:
+                self.episode_publisher.publish(EPISODE_TOPIC, {
+                    "timestamp": curr_pose[0],
+                    "left_ee":       curr_pose[1:8],
+                    "left_joints":   curr_pose[8:15],
+                    "left_gripper":  curr_pose[15],
+                    "right_ee":      curr_pose[16:23],
+                    "right_joints":  curr_pose[23:30],
+                    "right_gripper": curr_pose[30],
+                    "lift":          curr_pose[31],
+                    "left_ee_target":  x_Re_L.wxyz_xyz.tolist() if (self.start_teleop_left and x_Re_L is not None) else curr_pose[1:8],
+                    "right_ee_target": x_Re_R.wxyz_xyz.tolist() if (self.start_teleop_right and x_Re_R is not None) else curr_pose[16:23],
+                    "base_vel":      target_velocity.tolist(),
+                    "lift_cmd":      lift_target_cmd,
+                })
 
             # --- Toggle recording ---
             if controller_state.left_menu:
