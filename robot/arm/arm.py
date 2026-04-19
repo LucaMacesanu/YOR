@@ -375,11 +375,26 @@ class ArmNode:
 
     def stop(self):
         print("called stop")
+        if self.nero:
+            try:
+                gain = Gain()
+                gain.kp = [0.0] * 7
+                gain.kd = [0.0] * 7
+                self.nero.set_gain(gain)
+                self.nero.enable_gravity_compensation(False)
+                time.sleep(0.1)
+            except Exception as e:
+                print(f"[ArmNode] go_limp failed: {e}")
+
         if self.can_gripper:
             self.can_gripper.disable()
             self.can_gripper = None
+
         if self.nero:
-            self.nero.stop()
+            try:
+                self.nero.stop()
+            except Exception as e:
+                print(f"[ArmNode] nero.stop() failed: {e}")
 
 if __name__ == "__main__":
     _HERE = Path(__file__).parent.parent

@@ -7,9 +7,9 @@ GRIPPER_CMD_ID = 0x159
 EFFORT = 0.5  # 0-1, maps to 0-5 Nm; 0.5 gave reliable actuation in testing
 
 
-def _make_frame(position: float, status_code: int) -> bytes:
+def _make_frame(position: float, status_code: int, effort: float = EFFORT) -> bytes:
     pos_ref = int(position * 0.07 * 1e6)       # 0-1 → meters → micrometers
-    effort_ref = int(EFFORT * 5000)             # 0-1 → mNm
+    effort_ref = int(effort * 5000)             # 0-1 → mNm
     return struct.pack(">iH", pos_ref, effort_ref) + bytes([status_code, 0x00])
 
 
@@ -56,7 +56,7 @@ class CanGripper:
                 try:
                     self._bus.send(can.Message(
                         arbitration_id=GRIPPER_CMD_ID,
-                        data=_make_frame(0.0, status_code=0),
+                        data=_make_frame(0.0, status_code=0, effort=0.0),
                         is_extended_id=False,
                     ))
                 except Exception:

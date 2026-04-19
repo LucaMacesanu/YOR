@@ -496,15 +496,27 @@ def main():
     def graceful_shutdown():
         print("\nRPC Server stopping...")
         server.stop()
-        
+
         if not yor.no_arms:
             if hasattr(yor, 'left_arm') and yor.left_arm is not None:
-                input("\n[YOR] Press ENTER to drop LEFT arm...")
-                yor.left_arm.stop()
-            
+                try:
+                    input("\n[YOR] Press ENTER to drop LEFT arm...")
+                except EOFError:
+                    print("\n[YOR] Dropping LEFT arm...")
+                try:
+                    yor.left_arm.stop()
+                except Exception as e:
+                    print(f"[YOR] Left arm stop failed: {e}")
+
             if hasattr(yor, 'right_arm') and yor.right_arm is not None:
-                input("\n[YOR] Press ENTER to drop RIGHT arm...")
-                yor.right_arm.stop()
+                try:
+                    input("\n[YOR] Press ENTER to drop RIGHT arm...")
+                except EOFError:
+                    print("\n[YOR] Dropping RIGHT arm...")
+                try:
+                    yor.right_arm.stop()
+                except Exception as e:
+                    print(f"[YOR] Right arm stop failed: {e}")
                 
     atexit.register(graceful_shutdown)
     server.start()
