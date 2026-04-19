@@ -48,16 +48,16 @@ class YORAdvancedTeleop:
         self.record_data = False
         self.collect_episode = False
 
-        # Coordinate transform: controller -> user facing frame (position)
+        # Position transform: controller -> robot world frame
         self.H = mink.SE3.from_rotation(mink.SO3.from_matrix(np.array([[0, -1, 0], [0, 0, 1], [-1, 0, 0]])))
-        # Separate rotation-axis transform — tune independently to fix orientation mismatch
-        # All 6 row permutations of the original H rows: [0,-1,0], [0,0,1], [-1,0,0]
-        # 1: (0,1,2) original          [[0,-1,0], [0,0,1],  [-1,0,0]] — baseline
-        # 2: (1,0,2) swap rows 0,1     [[0,0,1],  [0,-1,0], [-1,0,0]] — tried, no
-        # 3: (0,2,1) swap rows 1,2     [[0,-1,0], [-1,0,0], [0,0,1]]
-        # 4: (2,1,0) swap rows 0,2     [[-1,0,0], [0,0,1],  [0,-1,0]]
-        # 5: (1,2,0) cyclic            [[0,0,1],  [-1,0,0], [0,-1,0]]
-        # 6: (2,0,1) cyclic other      [[-1,0,0], [0,-1,0], [0,0,1]]
+        # Rotation transform (permutation 5): correctly maps controller rotation axes to robot EE axes
+        # All 6 row permutations of H rows: [0,-1,0],[0,0,1],[-1,0,0]
+        # 1: (0,1,2) original          [[0,-1,0], [0,0,1],  [-1,0,0]] — position ✓, rotation ✗
+        # 2: (1,0,2) swap rows 0,1     [[0,0,1],  [0,-1,0], [-1,0,0]] — no
+        # 3: (0,2,1) swap rows 1,2     [[0,-1,0], [-1,0,0], [0,0,1]]  — no
+        # 4: (2,1,0) swap rows 0,2     [[-1,0,0], [0,0,1],  [0,-1,0]] — no
+        # 5: (1,2,0) cyclic            [[0,0,1],  [-1,0,0], [0,-1,0]] — rotation ✓
+        # 6: (2,0,1) cyclic other      [[-1,0,0], [0,-1,0], [0,0,1]]  — untested
         self.H_rot = mink.SO3.from_matrix(np.array([[0, 0, 1], [-1, 0, 0], [0, -1, 0]]))
         self.X_Cinit_left = None
         self.X_ee_init_left = None
@@ -74,6 +74,14 @@ class YORAdvancedTeleop:
         self.max_vel_setting = 0
         self.vel_alpha = 0.9
         self.last_target_velocity = np.array([0.0, 0.0, 0.0])
+
+        # arm smoothing (lerp)
+        self.ee_alpha = 0.5      # EE pose smoothing (0=no smooth, 1=frozen)
+        self.gripper_alpha = 0.3  # gripper smoothing
+        self.last_ee_target_left = None
+        self.last_ee_target_right = None
+        self.last_gripper_left = 0.0
+        self.last_gripper_right = 0.0
 
         # Robot RPC connection
         print("[YORTeleop] Connecting to YOR RPC at localhost:5557...")
@@ -123,6 +131,11 @@ class YORAdvancedTeleop:
 
         stick_socket.close()
         zmq_context.destroy()
+
+    def _lerp_se3(self, target: mink.SE3, last: mink.SE3, alpha: float) -> mink.SE3:
+        blended = (1 - alpha) * target.wxyz_xyz + alpha * last.wxyz_xyz
+        blended[:4] /= np.linalg.norm(blended[:4])
+        return mink.SE3(blended)
 
     def _compute_ee_target(self, X_Cinit, X_ee_init, X_Ctarget):
         """Compute the EE target pose with independent position and rotation transforms."""
@@ -203,8 +216,8 @@ class YORAdvancedTeleop:
                 time.sleep(BUTTON_DEBOUNCE_TIME)
 
             # --- Compute arm targets ---
-            x_Re_L, gripper_L, preview_time_L = None, 0.0, 1 / 15
-            x_Re_R, gripper_R, preview_time_R = None, 0.0, 1 / 15
+            x_Re_L, gripper_L, preview_time_L = None, 0.0, 2 / 15
+            x_Re_R, gripper_R, preview_time_R = None, 0.0, 2 / 15
 
             if self.start_teleop_left:
                 if self.X_Cinit_left is None or self.X_ee_init_left is None:
@@ -212,7 +225,14 @@ class YORAdvancedTeleop:
                     time.sleep(0.01)
                     continue
                 x_Re_L = self._compute_ee_target(self.X_Cinit_left, self.X_ee_init_left, controller_state.left_SE3)
+                if self.last_ee_target_left is not None:
+                    x_Re_L = self._lerp_se3(x_Re_L, self.last_ee_target_left, self.ee_alpha)
+                self.last_ee_target_left = x_Re_L
                 gripper_L = 1.0 - controller_state.left_index_trigger  # trigger 0=open, 1=closed
+                gripper_L = (1 - self.gripper_alpha) * gripper_L + self.gripper_alpha * self.last_gripper_left
+                self.last_gripper_left = gripper_L
+            else:
+                self.last_ee_target_left = None
 
             if self.start_teleop_right:
                 if self.X_Cinit_right is None or self.X_ee_init_right is None:
@@ -220,7 +240,14 @@ class YORAdvancedTeleop:
                     time.sleep(0.01)
                     continue
                 x_Re_R = self._compute_ee_target(self.X_Cinit_right, self.X_ee_init_right, controller_state.right_SE3)
+                if self.last_ee_target_right is not None:
+                    x_Re_R = self._lerp_se3(x_Re_R, self.last_ee_target_right, self.ee_alpha)
+                self.last_ee_target_right = x_Re_R
                 gripper_R = 1.0 - controller_state.right_index_trigger  # trigger 0=open, 1=closed
+                gripper_R = (1 - self.gripper_alpha) * gripper_R + self.gripper_alpha * self.last_gripper_right
+                self.last_gripper_right = gripper_R
+            else:
+                self.last_ee_target_right = None
 
             # --- Send arm commands ---
             if self.start_teleop_left and not self.start_teleop_right:

@@ -295,7 +295,7 @@ class NoMaDJoystickNode:
                     dist = msg.get("dist", float("inf"))
                     label = msg.get("label", "")
 
-                    if dist < 4.0:
+                    if dist < -1: #Disabled
                         print(f"[NoMaD seq {seq}] End state (dist={dist:.3f}) — holding.")
                         self.yor.set_base_velocity(np.zeros(3))
                         last_vel = np.zeros(3)
