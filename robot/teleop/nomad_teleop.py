@@ -148,7 +148,7 @@ class NoMaDReader:
 
 class NoMaDJoystickNode:
     def __init__(self, nomad_host: str, nomad_port: int, rpc_host: str, rpc_port: int,
-                 max_v: float, max_w: float, vel_alpha: float):
+                 max_v: float, max_w: float, vel_alpha: float, lookahead_idx: int):
         pygame.init()
         if pygame.joystick.get_count() < 1:
             raise RuntimeError("No joystick detected")
@@ -163,6 +163,7 @@ class NoMaDJoystickNode:
         self.vel_alpha = vel_alpha
         self.nomad_max_v = max_v
         self.nomad_max_w = max_w
+        self.lookahead_idx = lookahead_idx
 
         self.control_loop_running = False
         self.nomad_enabled = False  # toggled by A button
@@ -186,10 +187,11 @@ class NoMaDJoystickNode:
         #   dist >= 8  : full speed, normal turning
         #   4 <= dist < 8 : half speed, 3x turning
         #   dist < 4   : stop (handled by caller)
-        wp = msg["trajectory"][0]
-        la = msg.get("lookahead", wp)
+        traj = msg["trajectory"]
+        wp = traj[0]
+        la = traj[min(self.lookahead_idx, len(traj) - 1)]
 
-        mag = math.hypot(wp["x"], wp["y"])
+        mag = math.hypot(wp[0], wp[1])
         if mag < 1e-4:
             return np.zeros(3)
 
@@ -200,10 +202,10 @@ class NoMaDJoystickNode:
             speed_scale = 1.0
             turn_scale = 1.0
 
-        vx = self.nomad_max_v * speed_scale * (wp["x"] / mag)
-        vy = self.nomad_max_v * speed_scale * (wp["y"] / mag)
+        vx = self.nomad_max_v * speed_scale * (wp[0] / mag)
+        vy = self.nomad_max_v * speed_scale * (wp[1] / mag)
 
-        angle_rad = math.atan2(la["y"], la["x"])
+        angle_rad = math.atan2(la[1], la[0])
         angular_w = clamp(
             -angle_rad * self.nomad_max_w * turn_scale,
             -self.nomad_max_w * turn_scale,
@@ -374,6 +376,8 @@ def main():
                         help=f"NoMaD max yaw rate rad/s (default {MAX_W})")
     parser.add_argument("--vel-alpha", type=float, default=0.7,
                         help="Low-pass smoothing 0–1 (default 0.7; 0 = no smoothing)")
+    parser.add_argument("--lookahead-idx", type=int, default=5,
+                        help="Trajectory index used for turning direction (default 5)")
     args = parser.parse_args()
 
     node = NoMaDJoystickNode(
@@ -384,6 +388,7 @@ def main():
         max_v=args.max_v,
         max_w=args.max_w,
         vel_alpha=args.vel_alpha,
+        lookahead_idx=args.lookahead_idx,
     )
     node.control_loop()
 
