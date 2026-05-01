@@ -186,7 +186,7 @@ class NoMaDJoystickNode:
         #   dist >= 8  : full speed, normal turning
         #   4 <= dist < 8 : half speed, 3x turning
         #   dist < 4   : stop (handled by caller)
-        wp = msg["waypoint"]
+        wp = msg["trajectory"][0]
         la = msg.get("lookahead", wp)
 
         mag = math.hypot(wp["x"], wp["y"])
@@ -299,7 +299,6 @@ class NoMaDJoystickNode:
                         continue
 
                     if age > NOMAD_COMMAND_TIMEOUT:
-                        print(f"[NoMaD] Command stale ({age:.1f}s) — stopping.")
                         self.yor.set_base_velocity(np.zeros(3))
                         last_vel = np.zeros(3)
                         rate.sleep()
