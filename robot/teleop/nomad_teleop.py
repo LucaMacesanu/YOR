@@ -84,6 +84,9 @@ def apply_deadzone(arr, dz=0.05):
 # Background NoMaD TCP reader
 # ---------------------------------------------------------------------------
 
+NOMAD_COMMAND_TIMEOUT = 1.0  # seconds before a stale command stops the robot
+
+
 class NoMaDReader:
     """Connects to the NoMaD TCP stream and keeps the latest message available."""
 
@@ -91,15 +94,18 @@ class NoMaDReader:
         self.host = host
         self.port = port
         self.latest: dict | None = None
+        self._latest_time: float | None = None
         self._lock = threading.Lock()
         self._thread = threading.Thread(target=self._run, daemon=True)
 
     def start(self):
         self._thread.start()
 
-    def get_latest(self) -> dict | None:
+    def get_latest(self) -> tuple[dict | None, float | None]:
+        """Return (msg, age_seconds) where age is None if no message ever received."""
         with self._lock:
-            return self.latest
+            age = None if self._latest_time is None else time.time() - self._latest_time
+            return self.latest, age
 
     def _run(self):
         buf = ""
@@ -124,6 +130,7 @@ class NoMaDReader:
                     msg = json.loads(line)
                     with self._lock:
                         self.latest = msg
+                        self._latest_time = time.time()
 
             except (OSError, ConnectionResetError, json.JSONDecodeError) as e:
                 print(f"[NoMaD] Stream error: {e} — reconnecting in 2 s …")
@@ -285,9 +292,16 @@ class NoMaDJoystickNode:
 
                 # --- velocity source ---
                 if self.nomad_enabled:
-                    msg = self.nomad.get_latest()
+                    msg, age = self.nomad.get_latest()
                     if msg is None:
                         # No message yet — hold still
+                        rate.sleep()
+                        continue
+
+                    if age > NOMAD_COMMAND_TIMEOUT:
+                        print(f"[NoMaD] Command stale ({age:.1f}s) — stopping.")
+                        self.yor.set_base_velocity(np.zeros(3))
+                        last_vel = np.zeros(3)
                         rate.sleep()
                         continue
 
