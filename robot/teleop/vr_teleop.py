@@ -15,8 +15,11 @@ from robot.teleop.oculus_msgs import parse_controller_state
 from commlink import RPCClient, Publisher
 import argparse
 
+from robot.config import VR_IP
+
 EPISODE_PUB_PORT = 5558
 EPISODE_TOPIC = "teleop/episode"
+EPISODE_RESULT_TOPIC = "teleop/episode_result"
 
 
 def apply_deadzone(arr, deadzone_size=0.05):
@@ -24,7 +27,7 @@ def apply_deadzone(arr, deadzone_size=0.05):
 
 
 # VR Constants
-VR_TCP_HOST = "192.168.0.195"
+VR_TCP_HOST = VR_IP
 ZED_POSE_HOST = "194.168.1.11"
 VR_TCP_PORT = 5555
 VR_CONTROLLER_TOPIC = b"oculus_controller"
@@ -32,10 +35,40 @@ VR_CONTROLLER_TOPIC = b"oculus_controller"
 BUTTON_DEBOUNCE_TIME = 0.2  # seconds
 LOOP_RATE = 30  # Hz
 
+# Swerve forward-kinematics constants — mirror base_motor.py geometry; keep in sync if robot changes.
+# C maps body velocity [vx, vy, ω] to per-wheel [vx_w0..3, vy_w0..3] in module order [FL, FR, RR, RL].
+_SWERVE_WIDTH = 0.170   # m, lateral half-width between module centres
+_SWERVE_LENGTH = 0.1225  # m, longitudinal half-length between module centres
+_DRIVE_VEL_SCALE = 2.0   # SparkFlex raw unit → m/s: raw / scale = m/s
+_C_SWERVE = np.array([
+    [1, 0,  _SWERVE_WIDTH],
+    [1, 0, -_SWERVE_WIDTH],
+    [1, 0, -_SWERVE_WIDTH],
+    [1, 0,  _SWERVE_WIDTH],
+    [0, 1,  _SWERVE_LENGTH],
+    [0, 1,  _SWERVE_LENGTH],
+    [0, 1, -_SWERVE_LENGTH],
+    [0, 1, -_SWERVE_LENGTH],
+])
+
+
+def _enc_vel_from_encoders(encoders: dict) -> list:
+    """Forward kinematics from wheel encoders → body velocity [vx, vy, ω] (m/s, m/s, rad/s).
+    Sign convention: vx>0 forward, vy>0 left, ω>0 CCW from above.
+    """
+    drive_mps = np.array(encoders["drive_vel"]) / _DRIVE_VEL_SCALE
+    steer_rad = np.array(encoders["steer_rad"])
+    vx_w = drive_mps * np.cos(steer_rad)
+    vy_w = drive_mps * np.sin(steer_rad)
+    body_vel = np.linalg.lstsq(_C_SWERVE, np.concatenate([vx_w, vy_w]), rcond=None)[0]
+    return body_vel.tolist()
+
 
 class YORAdvancedTeleop:
-    def __init__(self, zed_pose: bool = False, zed_image: bool = False, reset_base_after_data_collection: bool = False):
+    def __init__(self, zed_pose: bool = False, zed_image: bool = False, reset_base_after_data_collection: bool = False, no_gripper: bool = False, act: bool = False):
         self.reset_base_after_data_collection = reset_base_after_data_collection
+        self.no_gripper = no_gripper
+        self.act = act
 
         # teleop state
         self.zed_pose = zed_pose
@@ -211,8 +244,25 @@ class YORAdvancedTeleop:
                 time.sleep(BUTTON_DEBOUNCE_TIME)
 
             if controller_state.right_thumbstick:
-                self.collect_episode = not self.collect_episode
-                print(f"[Episode] {'STARTED' if self.collect_episode else 'STOPPED'}")
+                if not self.collect_episode:
+                    self.collect_episode = True
+                    print("[Episode] STARTED")
+                else:
+                    self.collect_episode = False
+                    self.episode_publisher.publish(EPISODE_RESULT_TOPIC, {
+                        "timestamp": time.time(),
+                        "result": "success",
+                    })
+                    print("[Episode] ENDED — success")
+                time.sleep(BUTTON_DEBOUNCE_TIME)
+
+            if controller_state.left_thumbstick and self.collect_episode:
+                self.collect_episode = False
+                self.episode_publisher.publish(EPISODE_RESULT_TOPIC, {
+                    "timestamp": time.time(),
+                    "result": "fail",
+                })
+                print("[Episode] ENDED — fail")
                 time.sleep(BUTTON_DEBOUNCE_TIME)
 
             # --- Compute arm targets ---
@@ -228,9 +278,10 @@ class YORAdvancedTeleop:
                 if self.last_ee_target_left is not None:
                     x_Re_L = self._lerp_se3(x_Re_L, self.last_ee_target_left, self.ee_alpha)
                 self.last_ee_target_left = x_Re_L
-                gripper_L = 1.0 - controller_state.left_index_trigger  # trigger 0=open, 1=closed
-                gripper_L = (1 - self.gripper_alpha) * gripper_L + self.gripper_alpha * self.last_gripper_left
-                self.last_gripper_left = gripper_L
+                gripper_L = None if self.no_gripper else 1.0 * controller_state.left_index_trigger
+                if gripper_L is not None:
+                    gripper_L = (1 - self.gripper_alpha) * gripper_L + self.gripper_alpha * self.last_gripper_left
+                    self.last_gripper_left = gripper_L
             else:
                 self.last_ee_target_left = None
 
@@ -243,9 +294,10 @@ class YORAdvancedTeleop:
                 if self.last_ee_target_right is not None:
                     x_Re_R = self._lerp_se3(x_Re_R, self.last_ee_target_right, self.ee_alpha)
                 self.last_ee_target_right = x_Re_R
-                gripper_R = 1.0 - controller_state.right_index_trigger  # trigger 0=open, 1=closed
-                gripper_R = (1 - self.gripper_alpha) * gripper_R + self.gripper_alpha * self.last_gripper_right
-                self.last_gripper_right = gripper_R
+                gripper_R = None if self.no_gripper else 1.0 * controller_state.right_index_trigger
+                if gripper_R is not None:
+                    gripper_R = (1 - self.gripper_alpha) * gripper_R + self.gripper_alpha * self.last_gripper_right
+                    self.last_gripper_right = gripper_R
             else:
                 self.last_ee_target_right = None
 
@@ -340,7 +392,7 @@ class YORAdvancedTeleop:
 
             # --- Episode publishing ---
             if self.collect_episode and curr_pose is not None:
-                self.episode_publisher.publish(EPISODE_TOPIC, {
+                frame = {
                     "timestamp": curr_pose[0],
                     "left_ee":       curr_pose[1:8],
                     "left_joints":   curr_pose[8:15],
@@ -353,7 +405,12 @@ class YORAdvancedTeleop:
                     "right_ee_target": x_Re_R.wxyz_xyz.tolist() if (self.start_teleop_right and x_Re_R is not None) else curr_pose[16:23],
                     "base_vel":      target_velocity.tolist(),
                     "lift_cmd":      lift_target_cmd,
-                })
+                }
+                if self.act:
+                    encoders = self.yor.get_base_encoders()
+                    frame["cmd_vel"] = target_velocity.tolist()
+                    frame["enc_vel"] = _enc_vel_from_encoders(encoders) if encoders else [0.0, 0.0, 0.0]
+                self.episode_publisher.publish(EPISODE_TOPIC, frame)
 
             # --- Toggle recording ---
             if controller_state.left_menu:
@@ -447,11 +504,13 @@ class YORAdvancedTeleop:
         self.thread.join()
 
 
-def main(zed_pose, zed_image, reset_base):
+def main(zed_pose, zed_image, reset_base, no_gripper, act):
     teleop = YORAdvancedTeleop(
         reset_base_after_data_collection=reset_base,
         zed_pose=zed_pose,
-        zed_image=zed_image
+        zed_image=zed_image,
+        no_gripper=no_gripper,
+        act=act,
     )
     atexit.register(teleop.stop)
     teleop.control_loop()
@@ -462,5 +521,7 @@ if __name__ == "__main__":
     parser.add_argument('--reset_base', '-r', action='store_true', help='Reset base after data collection')
     parser.add_argument('--zed_pose', '-b', action='store_true', help='Record ZED base pose data')
     parser.add_argument('--zed_image', '-i', action='store_true', help='Record ZED image and depth data')
+    parser.add_argument('--no-gripper', action='store_true', help='Disable gripper control')
+    parser.add_argument('--act', action='store_true', help='Publish cmd_vel and enc_vel fields for ACT imitation learning')
     args = parser.parse_args()
-    main(args.zed_pose, args.zed_image, args.reset_base)
+    main(args.zed_pose, args.zed_image, args.reset_base, args.no_gripper, args.act)
