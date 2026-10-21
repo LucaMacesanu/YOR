@@ -1,1 +1,22 @@
-*pycache*
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+
+# Editor swap files
+*.swp
+*.swo
+*~
+
+# Backups
+*.bak
+*.bak_*
+*.bak-*
+
+# Logs and recorded data
+*.log
+teleop_data/
+
+# Vendored upstream checkout (github.com/agilexrobotics/pyAgxArm)
+pyAgxArm/
