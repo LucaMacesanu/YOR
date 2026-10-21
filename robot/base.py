@@ -9,6 +9,7 @@ from commlink import Subscriber
 from loop_rate_limiters import RateLimiter
 
 from .base_motor import Base
+from .config import BASE_VEL_CMD_TIMEOUT
 
 THOR_IP = "192.168.1.11"
 ZED_PUB_PORT = 6000
@@ -260,6 +261,9 @@ class BaseController:
 
         self.mode = "BASE_VEL"
         self.target_velocity = np.zeros(3, dtype=float)
+        # Monotonic time of the last external set_base_velocity(); BASE_VEL mode
+        # zeroes the base once this is older than BASE_VEL_CMD_TIMEOUT.
+        self.vel_cmd_time = 0.0
 
         self._path_world = None
         self._goal = None
@@ -345,6 +349,8 @@ class BaseController:
 
         while not self._stop_evt.is_set():
             if self.mode == "BASE_VEL":
+                if time.monotonic() - self.vel_cmd_time > BASE_VEL_CMD_TIMEOUT:
+                    self.target_velocity = np.zeros(3, dtype=float)
                 self.base.set_target_base_velocity(
                     np.asarray(self.target_velocity, dtype=float), smooth=True
                 )

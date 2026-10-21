@@ -46,21 +46,21 @@
     <material name="base_material" rgba="1 0 0 1" />
     <material name="base_profile_short_material" rgba="0.701961 0.701961 0.701961 1" />
     <material name="Part_2_material" rgba="0.615686 0.811765 0.929412 1" />
-    <material name="MK4_Colson_Hub_4_X_1.5_material" rgba="0.666667 0.698039 0.768627 1" />
+    <material name="MK4_Colson_Hub_4_X_1_5_material" rgba="0.666667 0.698039 0.768627 1" />
     <material name="Lift_Middle_material" rgba="0.901961 0.901961 0.901961 1" />
     <material name="default_material" rgba="0.7 0.7 0.7 1" />
 
-    <mesh name="base_profile_short.stl" file="meshes/base_profile_short.stl" />
-    <mesh name="Part_2.stl" file="meshes/Part_2.stl" />
-    <mesh name="MK4_Colson_Hub_4_X_1.5.stl" file="meshes/MK4_Colson_Hub_4_X_1.5.stl" />
-    <mesh name="Part_2_2.stl" file="meshes/Part_2_2.stl" />
-    <mesh name="MK4_Colson_Hub_4_X_1.5_2.stl" file="meshes/MK4_Colson_Hub_4_X_1.5_2.stl" />
-    <mesh name="Part_2_3.stl" file="meshes/Part_2_3.stl" />
-    <mesh name="MK4_Colson_Hub_4_X_1.5_3.stl" file="meshes/MK4_Colson_Hub_4_X_1.5_3.stl" />
-    <mesh name="Part_2_4.stl" file="meshes/Part_2_4.stl" />
-    <mesh name="MK4_Colson_Hub_4_X_1.5_4.stl" file="meshes/MK4_Colson_Hub_4_X_1.5_4.stl" />
-    <mesh name="Lift_Middle.stl" file="meshes/Lift_Middle.stl" />
-    <mesh name="Lift_Top.stl" file="meshes/Lift_Top.stl" />
+    <mesh name="base_profile_short" file="meshes/base_profile_short.stl" />
+    <mesh name="Part_2" file="meshes/Part_2.stl" />
+    <mesh name="MK4_Colson_Hub_4_X_1_5" file="meshes/MK4_Colson_Hub_4_X_1_5.stl" />
+    <mesh name="Part_2_2" file="meshes/Part_2_2.stl" />
+    <mesh name="MK4_Colson_Hub_4_X_1_5_2" file="meshes/MK4_Colson_Hub_4_X_1_5_2.stl" />
+    <mesh name="Part_2_3" file="meshes/Part_2_3.stl" />
+    <mesh name="MK4_Colson_Hub_4_X_1_5_3" file="meshes/MK4_Colson_Hub_4_X_1_5_3.stl" />
+    <mesh name="Part_2_4" file="meshes/Part_2_4.stl" />
+    <mesh name="MK4_Colson_Hub_4_X_1_5_4" file="meshes/MK4_Colson_Hub_4_X_1_5_4.stl" />
+    <mesh name="Lift_Middle" file="meshes/Lift_Middle.stl" />
+    <mesh name="Lift_Top" file="meshes/Lift_Top.stl" />
 
     <!-- piper assets -->
     <material name="white" rgba="1 1 1 1" />
@@ -93,9 +93,9 @@
         <inertial pos="-0.104952 -0.210077 0.000819" quat="1.0 0.0 0.0 0.0" mass="20.612589"
           diaginertia="0.321576 0.487585 0.4515" />
         <geom name="base_profile_short_collision" pos="0 0 0" quat="1.0 0.0 0.0 0.0" type="box"
-          mesh="base_profile_short.stl" class="collision" />
+          mesh="base_profile_short" class="collision" />
         <geom name="base_profile_short_visual" pos="0 0 0" quat="1.0 0.0 0.0 0.0"
-          material="base_profile_short_material" type="mesh" mesh="base_profile_short.stl"
+          material="base_profile_short_material" type="mesh" mesh="base_profile_short"
           class="visual" />
         <body name="Part_2" pos="-0.028575 -0.053975 0.104775"
           quat="0.5000001633974483 -0.4999999999999733 -0.49999983660255165 0.4999999999999733">
@@ -103,19 +103,19 @@
           <inertial pos="0.000006 0 -0.020456" quat="1.0 0.0 0.0 0.0" mass="0.671221"
             diaginertia="0.000668 0.000705 0.000812" />
           <geom name="Part_2_collision" pos="0 0 0" quat="1.0 0.0 0.0 0.0" type="mesh"
-            mesh="Part_2.stl" class="collision" />
+            mesh="Part_2" class="collision" />
           <geom name="Part_2_visual" pos="0 0 0" quat="1.0 0.0 0.0 0.0" material="Part_2_material"
-            type="mesh" mesh="Part_2.stl" class="visual" />
-          <body name="MK4_Colson_Hub_4_X_1.5" pos="0.021272 0 -0.075425"
+            type="mesh" mesh="Part_2" class="visual" />
+          <body name="MK4_Colson_Hub_4_X_1_5" pos="0.021272 0 -0.075425"
             quat="0.5000001633974483 -0.4999999999999733 -0.49999983660255165 0.4999999999999733">
             <joint name="drive_front_left" type="hinge" ref="0.0" class="drive_joint" axis="0 0 -1" />
             <inertial pos="0 0 0.019800" quat="1.0 0.0 0.0 0.0" mass="0.507297"
               diaginertia="0.000352 0.000352 0.000615" />
-            <geom name="MK4_Colson_Hub_4_X_1.5_collision" pos="0 0 0" quat="1.0 0.0 0.0 0.0"
-              type="mesh" mesh="MK4_Colson_Hub_4_X_1.5.stl" class="wheel" />
-            <geom name="MK4_Colson_Hub_4_X_1.5_visual" pos="0 0 0" quat="1.0 0.0 0.0 0.0"
-              material="MK4_Colson_Hub_4_X_1.5_material" type="mesh"
-              mesh="MK4_Colson_Hub_4_X_1.5.stl" class="visual" />
+            <geom name="MK4_Colson_Hub_4_X_1_5_collision" pos="0 0 0" quat="1.0 0.0 0.0 0.0"
+              type="mesh" mesh="MK4_Colson_Hub_4_X_1_5" class="wheel" />
+            <geom name="MK4_Colson_Hub_4_X_1_5_visual" pos="0 0 0" quat="1.0 0.0 0.0 0.0"
+              material="MK4_Colson_Hub_4_X_1_5_material" type="mesh"
+              mesh="MK4_Colson_Hub_4_X_1_5" class="visual" />
           </body>
         </body>
         <body name="Part_2_2" pos="-0.028575 -0.053975 -0.104775"
@@ -124,19 +124,19 @@
           <inertial pos="0.000006 0 -0.020456" quat="1.0 0.0 0.0 0.0" mass="0.671221"
             diaginertia="0.000668 0.000705 0.000812" />
           <geom name="Part_2_2_collision" pos="0 0 0" quat="1.0 0.0 0.0 0.0" type="mesh"
-            mesh="Part_2_2.stl" class="collision" />
+            mesh="Part_2_2" class="collision" />
           <geom name="Part_2_2_visual" pos="0 0 0" quat="1.0 0.0 0.0 0.0" material="Part_2_material"
-            type="mesh" mesh="Part_2_2.stl" class="visual" />
-          <body name="MK4_Colson_Hub_4_X_1.5_2" pos="0.021272 0 -0.075425"
+            type="mesh" mesh="Part_2_2" class="visual" />
+          <body name="MK4_Colson_Hub_4_X_1_5_2" pos="0.021272 0 -0.075425"
             quat="0.5000001633974483 -0.4999999999999733 -0.49999983660255165 0.4999999999999733">
             <joint name="drive_back_left" type="hinge" ref="0.0" class="drive_joint" axis="0 0 -1" />
             <inertial pos="0 0 0.019800" quat="1.0 0.0 0.0 0.0" mass="0.507297"
               diaginertia="0.000352 0.000352 0.000615" />
-            <geom name="MK4_Colson_Hub_4_X_1.5_2_collision" pos="0 0 0" quat="1.0 0.0 0.0 0.0"
-              type="mesh" mesh="MK4_Colson_Hub_4_X_1.5_2.stl" class="wheel" />
-            <geom name="MK4_Colson_Hub_4_X_1.5_2_visual" pos="0 0 0" quat="1.0 0.0 0.0 0.0"
-              material="MK4_Colson_Hub_4_X_1.5_material" type="mesh"
-              mesh="MK4_Colson_Hub_4_X_1.5_2.stl" class="visual" />
+            <geom name="MK4_Colson_Hub_4_X_1_5_2_collision" pos="0 0 0" quat="1.0 0.0 0.0 0.0"
+              type="mesh" mesh="MK4_Colson_Hub_4_X_1_5_2" class="wheel" />
+            <geom name="MK4_Colson_Hub_4_X_1_5_2_visual" pos="0 0 0" quat="1.0 0.0 0.0 0.0"
+              material="MK4_Colson_Hub_4_X_1_5_material" type="mesh"
+              mesh="MK4_Colson_Hub_4_X_1_5_2" class="visual" />
           </body>
         </body>
         <body name="Part_2_3" pos="-0.028575 -0.365125 0.104775"
@@ -145,19 +145,19 @@
           <inertial pos="0.000006 0 -0.020456" quat="1.0 0.0 0.0 0.0" mass="0.671221"
             diaginertia="0.000668 0.000705 0.000812" />
           <geom name="Part_2_3_collision" pos="0 0 0" quat="1.0 0.0 0.0 0.0" type="mesh"
-            mesh="Part_2_3.stl" class="collision" />
+            mesh="Part_2_3" class="collision" />
           <geom name="Part_2_3_visual" pos="0 0 0" quat="1.0 0.0 0.0 0.0" material="Part_2_material"
-            type="mesh" mesh="Part_2_3.stl" class="visual" />
-          <body name="MK4_Colson_Hub_4_X_1.5_3" pos="0.021272 0 -0.075425"
+            type="mesh" mesh="Part_2_3" class="visual" />
+          <body name="MK4_Colson_Hub_4_X_1_5_3" pos="0.021272 0 -0.075425"
             quat="0.5000001633974483 -0.4999999999999733 -0.49999983660255165 0.4999999999999733">
             <joint name="drive_front_right" type="hinge" ref="0.0" class="drive_joint" axis="0 0 -1" />
             <inertial pos="0 0 0.019800" quat="1.0 0.0 0.0 0.0" mass="0.507297"
               diaginertia="0.000352 0.000352 0.000615" />
-            <geom name="MK4_Colson_Hub_4_X_1.5_3_collision" pos="0 0 0" quat="1.0 0.0 0.0 0.0"
-              type="mesh" mesh="MK4_Colson_Hub_4_X_1.5_3.stl" class="wheel" />
-            <geom name="MK4_Colson_Hub_4_X_1.5_3_visual" pos="0 0 0" quat="1.0 0.0 0.0 0.0"
-              material="MK4_Colson_Hub_4_X_1.5_material" type="mesh"
-              mesh="MK4_Colson_Hub_4_X_1.5_3.stl" class="visual" />
+            <geom name="MK4_Colson_Hub_4_X_1_5_3_collision" pos="0 0 0" quat="1.0 0.0 0.0 0.0"
+              type="mesh" mesh="MK4_Colson_Hub_4_X_1_5_3" class="wheel" />
+            <geom name="MK4_Colson_Hub_4_X_1_5_3_visual" pos="0 0 0" quat="1.0 0.0 0.0 0.0"
+              material="MK4_Colson_Hub_4_X_1_5_material" type="mesh"
+              mesh="MK4_Colson_Hub_4_X_1_5_3" class="visual" />
           </body>
         </body>
         <body name="Part_2_4" pos="-0.028575 -0.365125 -0.104775"
@@ -166,19 +166,19 @@
           <inertial pos="0.000006 0 -0.020456" quat="1.0 0.0 0.0 0.0" mass="0.671221"
             diaginertia="0.000668 0.000705 0.000812" />
           <geom name="Part_2_4_collision" pos="0 0 0" quat="1.0 0.0 0.0 0.0" type="mesh"
-            mesh="Part_2_4.stl" class="collision" />
+            mesh="Part_2_4" class="collision" />
           <geom name="Part_2_4_visual" pos="0 0 0" quat="1.0 0.0 0.0 0.0" material="Part_2_material"
-            type="mesh" mesh="Part_2_4.stl" class="visual" />
-          <body name="MK4_Colson_Hub_4_X_1.5_4" pos="0.021272 0 -0.075425"
+            type="mesh" mesh="Part_2_4" class="visual" />
+          <body name="MK4_Colson_Hub_4_X_1_5_4" pos="0.021272 0 -0.075425"
             quat="0.5000001633974483 -0.4999999999999733 -0.49999983660255165 0.4999999999999733">
             <joint name="drive_back_right" type="hinge" ref="0.0" class="drive_joint" axis="0 0 -1" />
             <inertial pos="0 0 0.019800" quat="1.0 0.0 0.0 0.0" mass="0.507297"
               diaginertia="0.000352 0.000352 0.000615" />
-            <geom name="MK4_Colson_Hub_4_X_1.5_4_collision" pos="0 0 0" quat="1.0 0.0 0.0 0.0"
-              type="mesh" mesh="MK4_Colson_Hub_4_X_1.5_4.stl" class="wheel" />
-            <geom name="MK4_Colson_Hub_4_X_1.5_4_visual" pos="0 0 0" quat="1.0 0.0 0.0 0.0"
-              material="MK4_Colson_Hub_4_X_1.5_material" type="mesh"
-              mesh="MK4_Colson_Hub_4_X_1.5_4.stl" class="visual" />
+            <geom name="MK4_Colson_Hub_4_X_1_5_4_collision" pos="0 0 0" quat="1.0 0.0 0.0 0.0"
+              type="mesh" mesh="MK4_Colson_Hub_4_X_1_5_4" class="wheel" />
+            <geom name="MK4_Colson_Hub_4_X_1_5_4_visual" pos="0 0 0" quat="1.0 0.0 0.0 0.0"
+              material="MK4_Colson_Hub_4_X_1_5_material" type="mesh"
+              mesh="MK4_Colson_Hub_4_X_1_5_4" class="visual" />
           </body>
         </body>
         <body name="Lift_Middle" pos="-0.509400 -0.209550 0.000317"
@@ -188,18 +188,18 @@
           <inertial pos="0 0 -0.104000" quat="1.0 0.0 0.0 0.0" mass="1.460741"
             diaginertia="0.007792 0.007792 0.005051" />
           <geom name="Lift_Middle_collision" pos="0 0 0" quat="1.0 0.0 0.0 0.0" type="mesh"
-            mesh="Lift_Middle.stl" class="collision" />
+            mesh="Lift_Middle" class="collision" />
           <geom name="Lift_Middle_visual" pos="0 0 0" quat="1.0 0.0 0.0 0.0"
-            material="Lift_Middle_material" type="mesh" mesh="Lift_Middle.stl" class="visual" />
+            material="Lift_Middle_material" type="mesh" mesh="Lift_Middle" class="visual" />
           <body name="Lift_Top" pos="0 0 0" quat="1.0 0.0 0.0 0.0">
             <joint name="Slider_2" type="slide" ref="0.0" class="motor" range="0 0.208000"
               axis="0 0 1" />
             <inertial pos="0.000005 -0.000004 -0.024234" quat="1.0 0.0 0.0 0.0" mass="4.435110"
               diaginertia="0.042873 0.040894 0.045651" />
             <geom name="Lift_Top_collision" pos="0 0 0" quat="1.0 0.0 0.0 0.0" type="mesh"
-              mesh="Lift_Top.stl" class="collision" />
+              mesh="Lift_Top" class="collision" />
             <geom name="Lift_Top_visual" pos="0 0 0" quat="1.0 0.0 0.0 0.0"
-              material="Lift_Middle_material" type="mesh" mesh="Lift_Top.stl" class="visual" />
+              material="Lift_Middle_material" type="mesh" mesh="Lift_Top" class="visual" />
 
               <body name="left_arm_link0" euler="0.7854 0 3.14" pos="-0.005 -0.0925 0.0575" childclass="piper" gravcomp="1">
                 <inertial pos="-0.00473641 2.56829e-05 0.0414515"
@@ -426,13 +426,13 @@
     <exclude body1="Lift_Top" body2="right_arm_link0" />
     <exclude body1="base_profile_short" body2="Part_2" />
     <exclude body1="base_profile_short" body2="Part_2_2" />
-    <exclude body1="Part_2" body2="MK4_Colson_Hub_4_X_1.5" />
+    <exclude body1="Part_2" body2="MK4_Colson_Hub_4_X_1_5" />
     <exclude body1="base_profile_short" body2="Part_2_3" />
-    <exclude body1="Part_2_2" body2="MK4_Colson_Hub_4_X_1.5_2" />
+    <exclude body1="Part_2_2" body2="MK4_Colson_Hub_4_X_1_5_2" />
     <exclude body1="base_profile_short" body2="Part_2_4" />
     <exclude body1="base_profile_short" body2="Lift_Middle" />
-    <exclude body1="Part_2_3" body2="MK4_Colson_Hub_4_X_1.5_3" />
-    <exclude body1="Part_2_4" body2="MK4_Colson_Hub_4_X_1.5_4" />
+    <exclude body1="Part_2_3" body2="MK4_Colson_Hub_4_X_1_5_3" />
+    <exclude body1="Part_2_4" body2="MK4_Colson_Hub_4_X_1_5_4" />
     <exclude body1="Lift_Middle" body2="Lift_Top" />
   </contact>
 

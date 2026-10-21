@@ -2,6 +2,13 @@
 """
 To run joystick on Jetson Nano, install xpad drivers, add user to the input group,
 and set appropriate udev rules.
+
+Controls (press Start to enable, Back to disable):
+    Left stick      drive base (forward/back, sideways)
+    Right stick X   turn base
+    R1 / L1 (hold)  lift up / down; stops on release
+    D-pad           neck: left/right = pan, up/down = tilt (held = keeps moving)
+    Y               cycle base speed preset
 """
 
 import time
@@ -15,6 +22,7 @@ from commlink import RPCClient
 XBOX_CONTROLLER_MAP = {
     "start": 7,
     "back": 6,
+    "y": 3,
     "l1": 4,
     "r1": 5,
     "left_horizontal_axis": 0,
@@ -26,15 +34,24 @@ XBOX_CONTROLLER_MAP = {
 PS4_CONTROLLER_MAP = {
     "start": 3,
     "back": 0,  # square
+    "y": 2,  # triangle
     "l1": 4,
     "r1": 5,
     "left_horizontal_axis": 0,
+    "left_vertical_axis": 1,
     "right_horizontal_axis": 3,
     "right_vertical_axis": 4,
     "pad_y": 7,
 }
 
 controller_map = XBOX_CONTROLLER_MAP
+
+# Neck on the D-pad: degrees per second while held. Flip a sign if that
+# joint moves the wrong way.
+NECK_RATE_DEG_S = 60.0
+NECK_PAN_SIGN = 1.0    # D-pad right -> +pan
+NECK_TILT_SIGN = -1.0  # D-pad up -> -tilt (head up; verified on robot 2026-10-19)
+NECK_SEND_HZ = 30.0
 
 
 def apply_deadzone(arr, dz=0.05):
@@ -63,9 +80,25 @@ class JoystickNode:
         self.yor = RPCClient(host="localhost", port=5557)
         self.yor.init()  # starts Base control loop on the server
 
-        # D-pad debug state
-        self.last_pad_y = 0
+        self.last_lift_cmd = 0  # +1 up, -1 down, 0 stopped
+        self.last_y = 0
         self.warned_no_hat = False
+
+        # Neck target (deg), integrated from the D-pad. None = no neck on the robot.
+        self.neck_target = None
+        self.neck_limits = None
+        self.last_neck_send = 0.0
+        self.neck_unsent = False
+        try:
+            self.neck_limits = self.yor.get_neck_limits()
+            pos = self.yor.get_neck_position()
+            if self.neck_limits and pos:
+                self.neck_target = {"pan": float(pos["pan"]), "tilt": float(pos["tilt"])}
+                print(f"Neck on D-pad, starting at {self.neck_target}")
+            else:
+                print("No neck on this robot; D-pad does nothing")
+        except Exception as e:
+            print(f"Neck unavailable ({e}); D-pad does nothing")
 
     def display_joystick_inputs(self):
         """Display current joystick input values"""
@@ -115,33 +148,30 @@ class JoystickNode:
 
             if self.control_loop_running and self.joystick.get_button(controller_map["back"]):
                 self.control_loop_running = False
+                if self.last_lift_cmd != 0:
+                    self.yor.lift_stop()
+                    self.last_lift_cmd = 0
                 print("Control stopped")
                 self.display_joystick_inputs()
 
             if self.control_loop_running:
-                left_bumper = self.joystick.get_button(controller_map["l1"])
-                right_bumper = self.joystick.get_button(controller_map["r1"])
-                
-                if left_bumper:
+                # Y: cycle speed preset (on press)
+                y_btn = self.joystick.get_button(controller_map["y"])
+                if y_btn and not self.last_y:
                     self.max_vel_setting = (self.max_vel_setting + 1) % len(self.max_vels)
                     print("Max velocity setting:", self.max_vel_setting)
-                    time.sleep(0.1)
-                
-                # Display joystick inputs when right bumper is pressed
-                if right_bumper:
-                    self.display_joystick_inputs()
-                    time.sleep(0.1)
-                
+                self.last_y = y_btn
+
                 # Display inputs every 5 seconds (300 frames at 60Hz)
                 display_counter += 1
                 if display_counter >= 300:
                     self.display_joystick_inputs()
                     display_counter = 0
 
-                # Right stick → translation (vx, vy), Left stick X → yaw rate
-                vy = -self.joystick.get_axis(controller_map["right_horizontal_axis"])
-                vx = -self.joystick.get_axis(controller_map["right_vertical_axis"])
-                w  = -self.joystick.get_axis(controller_map["left_horizontal_axis"])
+                # Left stick -> translation (vx, vy), right stick X -> yaw rate
+                vy = -self.joystick.get_axis(controller_map["left_horizontal_axis"])
+                vx = -self.joystick.get_axis(controller_map["left_vertical_axis"])
+                w  = -self.joystick.get_axis(controller_map["right_horizontal_axis"])
                 target_velocity = np.array([vx, vy, w], dtype=float)
                 target_velocity = apply_deadzone(target_velocity)
 
@@ -154,29 +184,45 @@ class JoystickNode:
                 if np.linalg.norm(target_velocity, ord=1) > 1e-2:
                     self.yor.set_base_velocity(target_velocity)
 
-                # D-pad up/down controls lift via Pico serial
-                num_hats = self.joystick.get_numhats()
-                if num_hats < 1:
-                    if not self.warned_no_hat:
-                        print("WARN: Controller reports 0 hats; D-pad unsupported by this device/driver")
-                        self.warned_no_hat = True
-                    pad_y = 0
-                else:
-                    pad = self.joystick.get_hat(0)
-                    pad_y = pad[1]
-
-                if pad_y != self.last_pad_y:
-                    print(f"D-pad Y changed: {self.last_pad_y} -> {pad_y}")
-                    if pad_y > 0:
+                # Bumpers -> lift (hold R1 = up, hold L1 = down, both/neither = stop)
+                up = self.joystick.get_button(controller_map["r1"])
+                down = self.joystick.get_button(controller_map["l1"])
+                lift_cmd = (1 if up else 0) - (1 if down else 0)
+                if lift_cmd != self.last_lift_cmd:
+                    if lift_cmd > 0:
                         print("RPC: lift_up()")
                         self.yor.lift_up()
-                    elif pad_y < 0:
+                    elif lift_cmd < 0:
                         print("RPC: lift_down()")
                         self.yor.lift_down()
                     else:
                         print("RPC: lift_stop()")
                         self.yor.lift_stop()
-                    self.last_pad_y = pad_y
+                    self.last_lift_cmd = lift_cmd
+
+                # D-pad -> neck (rate control: held = keeps moving, released = holds)
+                if self.joystick.get_numhats() < 1:
+                    if not self.warned_no_hat:
+                        print("WARN: Controller reports 0 hats; D-pad unsupported by this device/driver")
+                        self.warned_no_hat = True
+                    pad_x, pad_y = 0, 0
+                else:
+                    pad_x, pad_y = self.joystick.get_hat(0)
+                if self.neck_target is not None and (pad_x or pad_y):
+                    step = NECK_RATE_DEG_S / 60.0  # loop runs at 60 Hz
+                    for joint, d in (("pan", NECK_PAN_SIGN * pad_x), ("tilt", NECK_TILT_SIGN * pad_y)):
+                        lo, hi = self.neck_limits[joint]
+                        self.neck_target[joint] = float(np.clip(self.neck_target[joint] + d * step, lo, hi))
+                    now = time.monotonic()
+                    self.neck_unsent = True
+                    if now - self.last_neck_send >= 1.0 / NECK_SEND_HZ:
+                        self.yor.set_neck_position(self.neck_target["pan"], self.neck_target["tilt"])
+                        self.last_neck_send = now
+                        self.neck_unsent = False
+                elif self.neck_target is not None and self.neck_unsent:
+                    # D-pad released: send the final target the throttle skipped.
+                    self.yor.set_neck_position(self.neck_target["pan"], self.neck_target["tilt"])
+                    self.neck_unsent = False
 
             rate.sleep()
 

@@ -1,4 +1,7 @@
 
+import json
+import os
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -11,7 +14,10 @@ except ImportError:
     print("nerolib not found. Please install it or use the 'nerolib' conda environment.")
     raise
 
-from robot.arm.gripper import Gripper
+try:
+    from robot.arm.gripper import Gripper
+except ImportError:
+    Gripper = None  # dynamixel_sdk not installed; Gripper unavailable
 from robot.arm.can_gripper import CanGripper
 from robot.arm.ik_solver import SingleArmIK
 
@@ -21,8 +27,41 @@ BAUDRATE = 1000000
 DXL_ID_RIGHT = 2
 DXL_ID_LEFT = 3
 
+# Opt-in per-solve IK log (2026-10-19), for debugging orientation failures offline.
+# YOR_IK_LOG=1 writes ~/ik_log_<timestamp>.jsonl; any other non-empty value is used as the path.
+# One JSON line per set_ee_target() call, both arms in the same file. Poses are in the MJCF
+# world frame as returned by mink.SE3, quaternions in w,x,y,z order, positions in meters,
+# joints in radians (joint1..joint7, the frame get_joint_positions() returns).
+_IK_LOG_ENV = os.environ.get("YOR_IK_LOG", "")
+_ik_log_file = None
+_ik_log_lock = threading.Lock()
+
+
+def _ik_log(record: dict):
+    # A logging problem (bad path, full disk) disables the log; it must never break arm control.
+    global _ik_log_file, _IK_LOG_ENV
+    if not _IK_LOG_ENV:
+        return
+    with _ik_log_lock:
+        try:
+            if _ik_log_file is None:
+                path = (os.path.expanduser(f"~/ik_log_{time.strftime('%Y%m%d_%H%M%S')}.jsonl")
+                        if _IK_LOG_ENV == "1" else _IK_LOG_ENV)
+                _ik_log_file = open(path, "a", buffering=1)
+                print(f"[ArmNode] IK log -> {path}")
+            _ik_log_file.write(json.dumps(record) + "\n")
+        except OSError as e:
+            print(f"[ArmNode] IK log disabled ({e})")
+            _IK_LOG_ENV = ""
+
 
 class ArmNode:
+    # After this many CONSECUTIVE non-converged IK solves, set_ee_target() stops sending the
+    # unconverged qd and holds the last position that DID converge instead. At this arm's
+    # typical ~30Hz command rate that's ~0.3s of genuine, persistent failure -- not a single
+    # noisy iteration -- chosen to react quickly without treating one bad solve as a crisis.
+    IK_FAIL_HOLD_THRESHOLD = 10
+
     def __init__(
         self,
         can_port: str,
@@ -30,6 +69,8 @@ class ArmNode:
         solver_dt: float = 0.01,
         is_left_arm: bool = True,
         dynamixel_gripper: bool = False,
+        no_gripper: bool = False,
+        samehand_gripper: bool = False,
         default_kp: Optional[float | list[float]] = 15.0,
         default_kd: Optional[float | list[float]] = 0.8,
         gravity_comp_scale: float = 1.0,
@@ -53,12 +94,25 @@ class ArmNode:
             self.config.urdf_path = self.urdf_path
             
             # Defines home position (originally in ControllerConfig)
-            # UPDATED: Using a safe intermediate home based on current readouts to avoid J1 limits/issues
+            # UPDATED 2026-09-11: set to the per-arm MEAN INITIAL JOINT POSITION over the
+            # icl-dataset-fixed-action episodes, so a policy rollout starts from the middle of the
+            # distribution the policy was trained on instead of an arbitrary safe pose. The
+            # previous hand-picked home sat below the dataset mean on 11 of 14 joints (RMS 0.59
+            # sigma), worst at the right wrist: rj4 and rj5 were each ~10 deg / ~1 sigma off.
+            #
+            # The two arms are NO LONGER an exact mirror, deliberately. The dataset's own start
+            # poses are mirror-symmetric for j0-j3 and j6 (left/right gap < 0.05 rad) but not at
+            # the wrist, where j5 differs by 0.197 rad and j4 by 0.112 between the arms. The old
+            # mirrored home could not represent that, which is where its largest errors came from.
+            #
+            # All 14 values checked against the URDF limits. Every margin stays wide; the tightest
+            # is left j1 at 0.363 rad (20.8 deg) from its +-1.74 limit, down from 0.464 rad. That
+            # is the joint the previous comment flagged, so it is the one to watch if homing ever
+            # misbehaves. Previous values kept in arm.py.bak_20260911_pre_home_dataset_means.
             self.home_position = (
-                [1.71, 1.32, -1.71, 1.31, 0.0, 0.0, 0.0] 
-                # [1.57, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0] # Modified J1 from 1.38 to -1.38 to match current state sign
+                [1.8317, 1.3773, -1.7357, 1.5211, -0.1130, -0.0954, 0.0973]
                 if is_left_arm
-                else [-1.71, 1.32, 1.71, 1.31, 0.0, 0.0, 0.0]
+                else [-1.8391, 1.3285, 1.7432, 1.5277, -0.0006, 0.1011, 0.1097]
             )
             
             self.config.home_position = self.home_position
@@ -98,6 +152,18 @@ class ArmNode:
         self.target: Optional[mink.SE3] = None
         self.gripper_target: Optional[float] = None
         self.q_offset = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        # IK convergence tracking (2026-09-10) -- set_ee_target() used to silently discard
+        # solve_ik()'s is_solved flag (qd, _ = ...), so a failed-to-converge target would still
+        # get sent with no signal anywhere that it happened. last_ik_solved is exposed to
+        # yor.py's get_ik_status() RPC method so joystick_policy_teleop.py (a separate process,
+        # talking to yor.py over RPC, not a direct import of this module) can see it too.
+        # None = this arm has never been given an EE target (joint-space-only commands so far,
+        # or nothing yet) -- distinct from True/False so "no data" isn't confused with "solved".
+        self.last_ik_solved: Optional[bool] = None
+        # Last joint target actually sent to nerolib (same frame as get_joint_positions()),
+        # recorded as the absolute-joint action for policy training. None until first command.
+        self.last_joint_target: Optional[np.ndarray] = None
+        self.ik_fail_streak = 0
         if is_left_arm:
             joint_names = [
                 "left_arm_joint1",
@@ -121,18 +187,23 @@ class ArmNode:
             ]
             ee_frame = "right_arm_ee"
 
-        self.ik_solver = SingleArmIK(
-            mjcf_path,
-            solver_dt=self.solver_dt,
-            joint_names=joint_names,
-            ee_frame=ee_frame,
-        )
+        self.ik_solver = None
+        if mjcf_path:
+            try:
+                self.ik_solver = SingleArmIK(
+                    mjcf_path,
+                    solver_dt=self.solver_dt,
+                    joint_names=joint_names,
+                    ee_frame=ee_frame,
+                )
+            except Exception as e:
+                print(f"[ArmNode] IK solver init failed ({e}). EE pose methods unavailable.")
 
         self.dynamixel_gripper = dynamixel_gripper
         self.gripper = None
         self.can_gripper: CanGripper | None = None
 
-        if self.dynamixel_gripper:
+        if self.dynamixel_gripper and Gripper is not None:
             # If your Gripper class uses /dev/ttyUSB0 internally, this will fail when unplugged.
             # Auto-disable instead of crashing.
             try:
@@ -151,9 +222,23 @@ class ArmNode:
                 self.dynamixel_gripper = False
                 self.gripper = None
 
-        if not self.dynamixel_gripper and self.nero is not None:
+        if samehand_gripper:
+            # SameHand fingers via the SameHand glove bridge (Zenoh). Same API as CanGripper.
+            # Left limp here: torque comes on with enable_gripper() (whole-body teleop does
+            # that on the first clutch with teleop on).
             try:
-                self.can_gripper = CanGripper(can_port)
+                from robot.arm.samehand_gripper import SameHandGripper
+                self.can_gripper = SameHandGripper()
+                print("[ArmNode] SameHand gripper connected (limp until enable_gripper())")
+            except Exception as e:
+                print(f"[ArmNode] SameHand gripper init failed ({e}). Continuing without gripper.")
+                self.can_gripper = None
+        elif not self.dynamixel_gripper and self.nero is not None and not no_gripper:
+            try:
+                # Both grippers' raw-zero references have been calibrated (AgileX
+                # AgxGripper zero-point cal, CAN 0x159 set_zero) so raw 0 is
+                # directly closed on both units; no per-side inversion needed.
+                self.can_gripper = CanGripper(can_port, inverted=False, close_overtravel=0.10)
                 self.can_gripper.enable()
                 print(f"[ArmNode] CanGripper enabled on {can_port}")
             except Exception as e:
@@ -166,23 +251,40 @@ class ArmNode:
 
 
 
+    def _is_arm_broadcasting(self) -> bool:
+        """Return True if any joint position is non-zero (arm is sending CAN state)."""
+        if self.nero is None:
+            return False
+        q = np.array(self.nero.get_current_state().pos)
+        return bool(np.any(q != 0.0))
+
     def init(self):
         if self.nero is None:
             print("[ArmNode] Warning: Nero not initialized, init() skipping hardware calls.")
             return
 
+        # If the arm didn't enable during start() its joint positions stay at 0.0 (no CAN
+        # feedback received). Wait up to 8s for the controller to wake up and start
+        # broadcasting, then try again before homing.
+        if not self._is_arm_broadcasting():
+            print(f"[ArmNode] {self.can_port}: arm not broadcasting CAN state — waiting 8s for controller to wake up...")
+            time.sleep(8.0)
+            if not self._is_arm_broadcasting():
+                print(f"[ArmNode] {self.can_port}: HARDWARE ISSUE — arm still not broadcasting after 8s delay.")
+                print(f"[ArmNode]   → Power-cycle the {self.can_port} arm and restart yor.py.")
+                return
+
         # Move to home position
-        print(f"[ArmNode] Moving to home position...")
+        print(f"[ArmNode] Moving to home position on {self.can_port}...")
         self.nero.reset_to_home()
-        
+
         # Sync IK solver with current state
         q = self.get_joint_positions()
-        
         print(f"q_reached: {np.round(q, 4)}")
-        
-        self.ik_solver.init(q)
-        
-        self.target = self.ik_solver.forward_kinematics()
+
+        if self.ik_solver is not None:
+            self.ik_solver.init(q)
+            self.target = self.ik_solver.forward_kinematics()
         
 
     def home(self, gripper_target: float = 1.0):
@@ -192,10 +294,18 @@ class ArmNode:
             except Exception as e:
                 print(f"[ArmNode] Home failed: {e}")
         
+        arm_side = "left" if self.is_left_arm else "right"
         if self.dynamixel_gripper:
             self.gripper.move_to_pos(int(gripper_target * self.gripper_range + self.close_gripper_value))
+        elif self.can_gripper:
+            print(f"[ArmNode] {arm_side} gripper: set_position({gripper_target})")
+            self.can_gripper.set_position(float(gripper_target))
+        else:
+            print(f"[ArmNode] {arm_side} gripper: can_gripper is None, skipping")
         time.sleep(2.0)
-        self.update_joint_positions()
+        q = self.get_joint_positions()
+        if self.ik_solver is not None:
+            self.ik_solver.init(q)
 
     def tuck_arms(self):
         self.set_joint_target(np.zeros(7), gripper_target=1.00, preview_time=2.0)
@@ -210,6 +320,7 @@ class ArmNode:
                 # We map joint_target to new_target_pos.
                 
                 target_pos = (joint_target + self.q_offset).tolist()
+                self.last_joint_target = np.array(joint_target, dtype=float)
 
                 self.nero.set_target(
                     new_target_pos=target_pos,
@@ -226,6 +337,22 @@ class ArmNode:
             elif self.can_gripper:
                 self.can_gripper.set_position(float(gripper_target))
 
+    def disable_gripper(self):
+        """Let the gripper go limp without touching arm joint control (for hardware debugging/calibration)."""
+        if self.can_gripper:
+            self.can_gripper.disable()
+
+    def enable_gripper(self) -> bool:
+        """Re-enable the gripper after disable_gripper(). False if it couldn't (e.g. SameHand bridge down)."""
+        if not self.can_gripper:
+            return False
+        try:
+            self.can_gripper.enable()
+            return True
+        except Exception as e:
+            print(f"[ArmNode] gripper enable failed: {e}")
+            return False
+
     def open_gripper(self):
         if self.dynamixel_gripper:
             self.gripper.move_to_pos(self.open_gripper_value)
@@ -239,8 +366,53 @@ class ArmNode:
             self.can_gripper.set_position(0.0)
 
     def set_ee_target(self, ee_target: mink.SE3, gripper_target: Optional[float] = None, preview_time: float = 0.0):
+        if self.ik_solver is None:
+            print("[ArmNode] set_ee_target: IK solver not available")
+            return
         self.target = ee_target
-        qd, _ = self.ik_solver.solve_ik(self.target)
+        q_measured = self.get_joint_positions()
+        self.ik_solver.update_configuration(q_measured)  # re-sync IK config with actual CAN positions before solving
+        qd, is_solved = self.ik_solver.solve_ik(self.target)
+        self.last_ik_solved = is_solved
+
+        side = "left" if self.is_left_arm else "right"
+        if _IK_LOG_ENV:
+            target = np.asarray(ee_target.wxyz_xyz)
+            achieved = np.asarray(self.ik_solver.forward_kinematics().wxyz_xyz)
+            _ik_log({
+                "t": time.time(),
+                "arm": side,
+                "q_measured": np.round(q_measured, 6).tolist(),
+                "target_pos": np.round(target[4:], 6).tolist(),
+                "target_quat_wxyz": np.round(target[:4], 6).tolist(),
+                "qd": np.round(qd, 6).tolist(),
+                "is_solved": bool(is_solved),
+                # FK of qd, so position/orientation error can be computed without rerunning IK
+                "achieved_pos": np.round(achieved[4:], 6).tolist(),
+                "achieved_quat_wxyz": np.round(achieved[:4], 6).tolist(),
+                # False when the fail-streak hold below suppresses the command
+                "sent": bool(is_solved or self.ik_fail_streak + 1 < self.IK_FAIL_HOLD_THRESHOLD),
+                "preview_time": float(preview_time),
+            })
+        if is_solved:
+            if self.ik_fail_streak >= 3:  # only worth a recovery log if it was a real streak
+                print(f"[ArmNode] IK recovered (side={side}) after {self.ik_fail_streak} "
+                      f"consecutive failed solves.")
+            self.ik_fail_streak = 0
+        else:
+            self.ik_fail_streak += 1
+            print(f"[ArmNode] WARNING: IK did not converge (side={side}, "
+                  f"consecutive_failures={self.ik_fail_streak})")
+            if self.ik_fail_streak >= self.IK_FAIL_HOLD_THRESHOLD:
+                # Sending qd here would command a target we know didn't converge -- e.g. an
+                # unreachable pose, near a singularity, or a target that's drifted far from
+                # anything the arm can actually track. Holding the last converged position is
+                # the safe default: no new command means nero just keeps executing whatever
+                # trajectory it already has, not a fresh reach toward an unvalidated solution.
+                print(f"[ArmNode] IK failing to converge for {self.ik_fail_streak} consecutive "
+                      f"solves (side={side}) -- holding last converged position, NOT sending "
+                      f"this target.")
+                return
         self.set_joint_target(qd, gripper_target, preview_time)
             
     def set_gripper(self, gripper_pos: float):
@@ -323,10 +495,16 @@ class ArmNode:
             # and 'snap' its internal trajectory state before we change gains.
             time.sleep(0.02)
 
+    def get_joint_state(self):
+        """Return raw nerolib JointState (pos, vel, torque arrays)."""
+        if self.nero is None:
+            return None
+        return self.nero.get_current_state()
+
     def get_joint_positions(self) -> np.ndarray:
         if self.nero is None:
              return np.zeros(7)
-             
+
         try:
             state = self.nero.get_current_state()
             q = np.array(state.pos)
@@ -355,6 +533,9 @@ class ArmNode:
             return np.zeros(7)
 
     def get_ee_pose(self) -> mink.SE3:
+        if self.ik_solver is None:
+            print("[ArmNode] get_ee_pose: IK solver not available")
+            return None
         self.update_joint_positions()
         return self.ik_solver.forward_kinematics()
 
@@ -366,7 +547,18 @@ class ArmNode:
             return self.can_gripper.get_position()
         return 0.0
 
+    def get_gripper_state(self) -> tuple[float | None, float | None]:
+        """(measured, commanded) opening in [0, 1]; measured is None when the
+        gripper gives no live feedback, so callers never mistake a command for a reading."""
+        if self.dynamixel_gripper:
+            return self.get_gripper_pose(), self.gripper_target
+        if self.can_gripper:
+            return self.can_gripper.get_measured(), self.can_gripper.get_commanded()
+        return None, None
+
     def update_joint_positions(self):
+        if self.ik_solver is None:
+            return
         q = self.get_joint_positions()
         self.ik_solver.update_configuration(q)
 
@@ -374,27 +566,22 @@ class ArmNode:
         self.q_offset = q_offset
 
     def stop(self):
-        print("called stop")
-        if self.nero:
-            try:
-                gain = Gain()
-                gain.kp = [0.0] * 7
-                gain.kd = [0.0] * 7
-                self.nero.set_gain(gain)
-                self.nero.enable_gravity_compensation(False)
-                time.sleep(0.1)
-            except Exception as e:
-                print(f"[ArmNode] go_limp failed: {e}")
-
         if self.can_gripper:
-            self.can_gripper.disable()
+            try:
+                if hasattr(self.can_gripper, "enabled"):  # SameHandGripper
+                    self.can_gripper.stop()
+                else:
+                    self.can_gripper.disable()
+            except Exception as e:
+                print(f"[ArmNode] gripper disable failed: {e}")
             self.can_gripper = None
 
         if self.nero:
             try:
-                self.nero.stop()
+                self.nero.stop()  # holds current pos briefly, then disables motors
             except Exception as e:
                 print(f"[ArmNode] nero.stop() failed: {e}")
+            self.nero = None
 
 if __name__ == "__main__":
     _HERE = Path(__file__).parent.parent

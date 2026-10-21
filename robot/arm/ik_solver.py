@@ -59,13 +59,39 @@ class SingleArmIK:
             self.tasks.append(self.lift_equality_task)
         self.limits = [mink.ConfigurationLimit(self.model)]  # , mink.VelocityLimit(self.model, velocity_limits)]
 
+        # Lift is a FIXED 0, not a free IK variable (2026-09-11). The model mounts both arms on
+        # lift_joint (vertical slide, 0-0.208 m), but only the 7 arm joints are ever sent to the
+        # motors and the hardware has no lift feedback. Left free, the solver would raise this
+        # "phantom lift" to reach out-of-reach targets, report them converged, and then the real
+        # arm fell short by that amount -- and the value persisted in this model (per arm, since
+        # each ArmNode owns its own SingleArmIK) and leaked into get_ee_pose()'s FK. Measured live:
+        # left +1.07 cm / right +9.60 cm; recorded dataset action.*_ee Z carried 0-22 cm of it.
+        # See diagnostics/z_offset_evidence_ik_virtual_lift_2026-09-11.png on the inference box.
+        self.constraints = []
+        self._lift_qpos_adr = None
+        if not use_lift:
+            try:
+                lift = self.model.joint("lift_joint")
+            except KeyError:
+                lift = None
+            if lift is not None:
+                self._lift_qpos_adr = int(self.model.jnt_qposadr[lift.id])
+                self.constraints = [
+                    mink.DofFreezingTask(self.model, dof_indices=[int(self.model.jnt_dofadr[lift.id])])
+                ]
+
         # initial setup
         self.initalized_ = False
+
+    def _pin_lift(self, q: np.ndarray) -> np.ndarray:
+        if self._lift_qpos_adr is not None:
+            q[self._lift_qpos_adr] = 0.0
+        return q
 
     def init(self, q):
         current_q = self.configuration.q.copy()
         current_q[self.dof_ids] = q
-        self.configuration.update(current_q)
+        self.configuration.update(self._pin_lift(current_q))
         self.posture_task.set_target_from_configuration(self.configuration)
         self.initalized_ = True
 
@@ -79,7 +105,8 @@ class SingleArmIK:
         is_solved = False
         for _ in range(max_iter):
             vel = mink.solve_ik(
-                self.configuration, self.tasks, self.solver_dt, solver="daqp", damping=1e-5, limits=self.limits
+                self.configuration, self.tasks, self.solver_dt, solver="daqp", damping=1e-5,
+                limits=self.limits, constraints=self.constraints,
             )
             self.configuration.integrate_inplace(vel, self.solver_dt)
             err = self.end_effector_task.compute_error(self.configuration)
@@ -92,7 +119,7 @@ class SingleArmIK:
     def update_configuration(self, q: np.ndarray):
         current_q = self.configuration.q.copy()
         current_q[self.dof_ids] = q
-        self.configuration.update(current_q)
+        self.configuration.update(self._pin_lift(current_q))
 
     def forward_kinematics(self) -> mink.SE3:
         return self.configuration.get_transform_frame_to_world(

@@ -41,7 +41,7 @@ python robot/yor.py
 # Teleoperation clients (connect to RPC server at :5557)
 python robot/teleop/telestick.py     # keyboard
 python robot/teleop/joystick.py      # gamepad
-python robot/teleop/yor_teleop.py    # VR/advanced
+python robot/teleop/vr_teleop.py     # VR + data collection (yor_teleop.py is an alias)
 
 # Automated tmux session (CAN setup + robot + teleop)
 ./create_windows.sh
@@ -53,6 +53,7 @@ Tests are ad-hoc scripts, not pytest-structured:
 
 ```bash
 python robot/test_gripper_can.py --can can_left
+python robot/test_lift.py [--move]          # Pico serial lift; no motion without --move
 python robot/test_gripper_pyagx.py
 python robot/test_left_compliant.py
 python robot/test_bimanual_keyboard_teleop.py

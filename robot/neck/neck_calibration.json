@@ -1,0 +1,23 @@
+{
+  "model": "sts3215",
+  "motors": {
+    "pan": {
+      "id": 7,
+      "drive_mode": 0,
+      "homing_offset": 1763,
+      "range_min": 600,
+      "range_max": 3456
+    },
+    "tilt": {
+      "id": 8,
+      "drive_mode": 0,
+      "homing_offset": -1411,
+      "range_min": 1427,
+      "range_max": 3077
+    }
+  },
+  "home_deg": {
+    "pan": 2.02,
+    "tilt": -3.25
+  }
+}

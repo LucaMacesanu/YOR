@@ -1,4 +1,5 @@
 # yor.py
+import os
 import sys
 import functools
 import time
@@ -53,7 +54,17 @@ class YOR():
         self,
         base_max_vel=np.array((1.0, 1.0, 1.57)),
         base_max_accel=np.array((1.0, 1.0, 1.57)),
-        no_arms: bool = True,  # default to True since Base is independent now
+        no_arms: bool = False,
+        # AgileX gripper code (CanGripper, CAN 0x159/0x2A8) is off by default:
+        # the right arm has a custom gripper and the left gripper is removed
+        # (2026-10-19). Pass no_gripper=False / --agx-gripper to turn it back on.
+        no_gripper: bool = True,
+        # SameHand fingers on the right arm (via the SameHand bridge over Zenoh).
+        samehand_gripper: bool = True,
+        no_neck: bool = False,
+        # Neck servo speed limits (STS units); None = robot/neck/neck.py defaults.
+        neck_servo_speed: int | None = None,
+        neck_servo_accel: int | None = None,
     ):
         self._initialized = False
         self._zed_initialized = False
@@ -75,18 +86,37 @@ class YOR():
         )
         self.base = self.base_controller.base
         self.no_arms = no_arms
+
+        # Neck (2-DOF Feetech pan/tilt). Optional: if the adapter or calibration
+        # is missing, warn and run without it.
+        self.neck = None
+        self._neck_cmd = None  # last commanded {"pan", "tilt"} in degrees
+        if not no_neck:
+            try:
+                from robot.neck.neck import Neck
+                neck = Neck()
+                if not neck.is_calibrated:
+                    raise RuntimeError("not calibrated (run robot/neck/neck_setup.py calibrate)")
+                neck.connect(velocity=neck_servo_speed, accel=neck_servo_accel)
+                self.neck = neck
+                print(f"[YOR] Neck connected on {neck.bus.port}")
+            except Exception as e:
+                print(f"[YOR] Neck disabled: {e}")
         if not self.no_arms:
             _HERE = Path(__file__).parent
             self.left_arm = ArmNode(
                 can_port="can_left",
                 mjcf_path=(_HERE / "yor-description/nero-welded-base-and-lift.mjcf").as_posix(),
                 dynamixel_gripper=False,
+                no_gripper=no_gripper,
             )
             self.right_arm = ArmNode(
                 can_port="can_right",
                 mjcf_path=(_HERE / "yor-description/nero-welded-base-and-lift.mjcf").as_posix(),
                 is_left_arm=False,
                 dynamixel_gripper=False,
+                no_gripper=no_gripper,
+                samehand_gripper=samehand_gripper,
             )
      
 
@@ -102,6 +132,14 @@ class YOR():
         # No homing needed for Pico lift; ignore if present
         time.sleep(0.5)
 
+        if self.neck is not None and self.neck.home_deg:
+            try:
+                reached = self.neck.go_home()
+                self._neck_cmd = dict(self.neck.home_deg)
+                print(f"[YOR] Neck {'homed' if reached else 'homing timed out'}: {self.neck.get_position_deg()}")
+            except Exception as e:
+                print(f"[YOR] Neck homing failed: {e}")
+
         # Arms remain optional
         if not self.no_arms:
             self.left_arm.init()
@@ -114,6 +152,7 @@ class YOR():
     def set_base_velocity(self, velocity: np.ndarray):
         self.base_controller.mode = "BASE_VEL"
         self.base_controller.target_velocity = velocity
+        self.base_controller.vel_cmd_time = time.monotonic()
 
     
     @require_initialization
@@ -210,6 +249,12 @@ class YOR():
 
 
     @require_initialization
+    def set_lift_position(self, target_m) -> bool:
+        """Alias used by yor_teleop / vr_teleop reset path."""
+        height = float(target_m) if np.isscalar(target_m) else float(np.asarray(target_m).ravel()[0])
+        return self.lift_to_height(height)
+
+    @require_initialization
     def lift_to_height(
         self,
         target_m: float,
@@ -263,7 +308,7 @@ class YOR():
         self.left_arm.set_gain(kp, kd)
 
     @require_initialization
-    def home_left_arm(self, gripper_target: float = 0.0):
+    def home_left_arm(self, gripper_target: float = 1.0):
         if self.no_arms:
             print("left arm disabled")
             return
@@ -279,6 +324,22 @@ class YOR():
             print("left arm disabled")
             return
         self.left_arm.tuck_arms()
+
+    @require_initialization
+    def disable_left_gripper(self):
+        """Let the left gripper go limp (for hardware debugging/calibration); arm joints unaffected."""
+        if self.no_arms:
+            print("left arm disabled")
+            return
+        self.left_arm.disable_gripper()
+
+    @require_initialization
+    def enable_left_gripper(self):
+        """Re-enable the left gripper after disable_left_gripper()."""
+        if self.no_arms:
+            print("left arm disabled")
+            return
+        self.left_arm.enable_gripper()
 
     @require_initialization
     def open_left_gripper(self):
@@ -370,6 +431,22 @@ class YOR():
         self.right_arm.tuck_arms()
 
     @require_initialization
+    def disable_right_gripper(self):
+        """Let the right gripper go limp (for hardware debugging/calibration); arm joints unaffected."""
+        if self.no_arms:
+            print("right arm disabled")
+            return
+        self.right_arm.disable_gripper()
+
+    @require_initialization
+    def enable_right_gripper(self):
+        """Re-enable the right gripper after disable_right_gripper(). Returns True on success."""
+        if self.no_arms:
+            print("right arm disabled")
+            return False
+        return self.right_arm.enable_gripper()
+
+    @require_initialization
     def open_right_gripper(self):
         if self.no_arms:
             print("right arm disabled")
@@ -446,12 +523,95 @@ class YOR():
             return row
 
     @require_initialization
+    def get_collection_state(self) -> dict:
+        """Everything a data-collection frame needs, sampled in one RPC call.
+
+        Gripper values are split into measured (None if the gripper sends no live
+        feedback) and commanded, so a dataset never confuses one for the other.
+        enc_vel is body velocity [vx, vy, wz] from swerve forward kinematics on
+        the measured wheel encoders. No lift fields: the lift is not used.
+        """
+        state = {"timestamp": time.time(), "base_cmd_vel": np.asarray(
+            self.base_controller.target_velocity, dtype=float).tolist()}
+        state["enc_vel"] = self.base.get_measured_body_velocity()
+        if self.neck is not None:
+            try:
+                pos = self.neck.get_position_deg()
+                state["neck_deg"] = [pos["pan"], pos["tilt"]]
+            except Exception:
+                state["neck_deg"] = None
+            cmd = self._neck_cmd
+            state["neck_cmd_deg"] = None if not cmd else [cmd.get("pan"), cmd.get("tilt")]
+        if self.no_arms:
+            return state
+        for side, arm in (("left", self.left_arm), ("right", self.right_arm)):
+            ee = arm.get_ee_pose()
+            measured, commanded = arm.get_gripper_state()
+            state[f"{side}_ee"] = ee.wxyz_xyz.tolist() if ee is not None else None
+            state[f"{side}_joints"] = arm.get_joint_positions().tolist()
+            q_cmd = arm.last_joint_target
+            state[f"{side}_joints_cmd"] = None if q_cmd is None else q_cmd.tolist()
+            state[f"{side}_gripper"] = None if measured is None else float(measured)
+            state[f"{side}_gripper_cmd"] = None if commanded is None else float(commanded)
+            state[f"{side}_ik_ok"] = None if arm.last_ik_solved is None else bool(arm.last_ik_solved)
+        return state
+
+    @require_initialization
+    def get_ik_status(self) -> tuple[bool | None, bool | None]:
+        """(left_is_solved, right_is_solved) from each arm's most recent EE-target IK solve --
+        see ArmNode.set_ee_target()/last_ik_solved. None if that arm has never been given an EE
+        target yet (joint-space-only commands so far, or nothing at all) -- kept distinct from
+        True/False so "no data" isn't read as "solved". Exposed as its own RPC call (2026-09-10)
+        rather than folded into get_bimanual_state()'s row, since that method's fixed-width list
+        layout is depended on elsewhere (recording/replay) and this is a genuinely separate,
+        optional signal, not part of the robot's physical state."""
+        if self.no_arms:
+            return (None, None)
+        return (self.left_arm.last_ik_solved, self.right_arm.last_ik_solved)
+
+    @require_initialization
     def set_bimanual_ee_target(self,
                            L_ee_target: mink.SE3, R_ee_target: mink.SE3,
                            L_gripper_target: float | None = None, L_preview_time: float = 0.1,
                            R_gripper_target: float | None = None, R_preview_time: float = 0.1):
         self.left_arm.set_ee_target(L_ee_target, L_gripper_target, L_preview_time)
         self.right_arm.set_ee_target(R_ee_target, R_gripper_target, R_preview_time)
+
+    # Neck (degrees from the centre of each joint's calibrated range)
+    @require_initialization
+    def set_neck_position(self, pan: float | None = None, tilt: float | None = None):
+        """Move the neck; None leaves that joint unchanged. Goals are clipped to the
+        calibrated range. Returns the goal actually sent, or None without a neck."""
+        if self.neck is None:
+            return None
+        goal = self.neck.set_position_deg(pan=pan, tilt=tilt)
+        self._neck_cmd = {**(self._neck_cmd or {}), **goal}
+        return goal
+
+    @require_initialization
+    def get_neck_position(self):
+        """{"pan": deg, "tilt": deg}, or None without a neck."""
+        return None if self.neck is None else self.neck.get_position_deg()
+
+    @require_initialization
+    def get_neck_limits(self):
+        """{"pan": (min, max), "tilt": (min, max)} in degrees, or None without a neck."""
+        return None if self.neck is None else self.neck.get_limits_deg()
+
+    @require_initialization
+    def home_neck(self) -> bool:
+        if self.neck is None:
+            return False
+        reached = self.neck.go_home()
+        self._neck_cmd = dict(self.neck.home_deg)
+        return reached
+
+    @require_initialization
+    def set_neck_torque(self, on: bool):
+        """Torque off lets the neck be posed by hand; any set_neck_position() turns it back on."""
+        if self.neck is None:
+            return
+        self.neck.torque(bool(on))
 
     @require_initialization
     def get_cmd_vel(self):
@@ -488,40 +648,95 @@ class YOR():
         }
 
 
-def main():    
-    yor = YOR(no_arms=False)
+def main():
+    import argparse
+    import signal
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--agx-gripper', action='store_true',
+                        help='Enable the AgileX CAN gripper code (off by default)')
+    parser.add_argument('--no-gripper', action='store_true',
+                        help='No effect; the AgileX gripper is already off by default')
+    parser.add_argument('--no-samehand', action='store_true',
+                        help='Run without the SameHand fingers on the right arm')
+    parser.add_argument('--no-arms', action='store_true', help='Disable arm initialization (base-only mode)')
+    parser.add_argument('--no-neck', action='store_true', help='Run without the Feetech neck')
+    parser.add_argument('--neck-servo-speed', type=int, default=None,
+                        help='Neck servo max speed, steps/s (4096/rev; default 2000 ~ 175 deg/s; 0 = no limit)')
+    parser.add_argument('--neck-servo-accel', type=int, default=None,
+                        help='Neck servo acceleration, 0-254 in 100 steps/s^2 (default 80; 0 = no limit)')
+    args = parser.parse_args()
+
+    yor = YOR(no_arms=args.no_arms, no_gripper=not args.agx_gripper,
+              samehand_gripper=not args.no_samehand, no_neck=args.no_neck,
+              neck_servo_speed=args.neck_servo_speed, neck_servo_accel=args.neck_servo_accel)
     yor.init()
     server = RPCServer(yor, port=YOR_PORT, threaded=True)
-    
+
+    _shutdown_called = False
+    stop_requested = threading.Event()
+
     def graceful_shutdown():
-        print("\nRPC Server stopping...")
-        server.stop()
+        nonlocal _shutdown_called
+        if _shutdown_called:
+            return
+        _shutdown_called = True
+
+        print("\n[YOR] Shutting down...")
+        try:
+            server.stop()
+        except Exception as e:
+            print(f"[YOR] Server stop failed: {e}")
+
+        # Base: stop the nav/velocity worker, then the motor loop. The SparkFlex
+        # motors stop on their own once heartbeats stop.
+        try:
+            yor.base_controller.stop()
+            yor.base.stop_control()
+        except Exception as e:
+            print(f"[YOR] Base stop failed: {e}")
+        try:
+            yor.base.lift_stop()
+        except Exception as e:
+            print(f"[YOR] Lift stop failed: {e}")
+
+        if yor.neck is not None:
+            # Leave torque ON so the head holds its pose instead of dropping.
+            # `python robot/neck/neck_setup.py read` releases it.
+            try:
+                yor.neck.close(disable_torque=False)
+            except Exception as e:
+                print(f"[YOR] Neck close failed: {e}")
 
         if not yor.no_arms:
-            if hasattr(yor, 'left_arm') and yor.left_arm is not None:
-                try:
-                    input("\n[YOR] Press ENTER to drop LEFT arm...")
-                except EOFError:
-                    print("\n[YOR] Dropping LEFT arm...")
-                try:
-                    yor.left_arm.stop()
-                except Exception as e:
-                    print(f"[YOR] Left arm stop failed: {e}")
+            for label, arm in [("LEFT", getattr(yor, "left_arm", None)),
+                                ("RIGHT", getattr(yor, "right_arm", None))]:
+                if arm is not None:
+                    print(f"[YOR] Stopping {label} arm...")
+                    try:
+                        arm.stop()
+                    except Exception as e:
+                        print(f"[YOR] {label} arm stop failed: {e}")
 
-            if hasattr(yor, 'right_arm') and yor.right_arm is not None:
-                try:
-                    input("\n[YOR] Press ENTER to drop RIGHT arm...")
-                except EOFError:
-                    print("\n[YOR] Dropping RIGHT arm...")
-                try:
-                    yor.right_arm.stop()
-                except Exception as e:
-                    print(f"[YOR] Right arm stop failed: {e}")
-                
+        print("[YOR] Shutdown complete.")
+
+    def on_signal(signum, frame):
+        if stop_requested.is_set():
+            # Second Ctrl-C while shutdown is in progress: force quit.
+            print("\n[YOR] Forced exit.", flush=True)
+            os._exit(1)
+        stop_requested.set()
+
+    signal.signal(signal.SIGINT, on_signal)
+    signal.signal(signal.SIGTERM, on_signal)
     atexit.register(graceful_shutdown)
+
     server.start()
-    while True:
-        time.sleep(1)
+    # Shutdown runs here in the main thread, not inside the signal handler, so
+    # the process actually exits afterwards.
+    while not stop_requested.wait(1.0):
+        pass
+    graceful_shutdown()
+    sys.exit(0)
 
 
 

@@ -66,7 +66,7 @@ class OculusAllInOne:
         self.X_ee_init = None
 
         # RPC (same server for base/arm/lift)
-        self.yor: YOR = RPCClient(host="localhost", port=8081)
+        self.yor: YOR = RPCClient(host="localhost", port=5557)
         self.yor.init()
         self.yor.home_right_arm()
 

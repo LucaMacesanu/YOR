@@ -1,0 +1,9 @@
+# Pin YOR arm CAN adapters to fixed interface names by USB serial,
+# instead of relying on kernel enumeration order (can0/can1/can2),
+# which is not guaranteed stable across boots when multiple identical
+# USB-CAN adapters share a hub.
+#
+# Verified 2026-10-19 by unplugging the right arm's CAN cable: the right arm
+# is on adapter 004400434759530820353131, the left arm on 004000304759530820353131.
+SUBSYSTEM=="net", KERNEL=="can*", ACTION=="add", ATTRS{serial}=="004000304759530820353131", NAME="can_left"
+SUBSYSTEM=="net", KERNEL=="can*", ACTION=="add", ATTRS{serial}=="004400434759530820353131", NAME="can_right"

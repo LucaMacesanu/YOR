@@ -11,6 +11,8 @@ import queue  # for queue.Empty / queue.Full
 
 from loop_rate_limiters import RateLimiter
 
+from .config import LIFT_ENABLED
+
 # --- New motor API ---
 from sparkcan_py import SparkFlex
 
@@ -376,7 +378,8 @@ class Base:
             DriveMotor(drivetrain_can, CAN_IDS_DRIVE[i]) for i in range(NUM_SWERVES)
         ]
 
-        self._pico_lift = PicoLift()
+        # Pico lift on /dev/ttyACM0; set YOR_LIFT=0 to leave the port alone.
+        self._pico_lift = PicoLift() if LIFT_ENABLED else None
 
         self.steer_pos = np.zeros(NUM_SWERVES)
         self.drive_vel = np.zeros(NUM_SWERVES)
@@ -596,6 +599,18 @@ class Base:
         self.control_loop_running = False
         self.control_loop_thread.join()
         self.control_loop_thread = None
+
+    def get_measured_body_velocity(self) -> Optional[list]:
+        """Body velocity [vx, vy, wz] (m/s, m/s, rad/s) from wheel encoders via
+        least-squares inverse of self.C. Drive speed is measured; steer angle is
+        measured only if USE_FEEDBACK_FOR_STEER, otherwise the last command.
+        None if any motor read failed."""
+        drive_mps = np.array([m.get_velocity_raw() for m in self.drive_motors]) / DRIVE_VEL_SCALE
+        steer_rad = np.array([m.get_position_rad() for m in self.rotation_motors])
+        if not (np.all(np.isfinite(drive_mps)) and np.all(np.isfinite(steer_rad))):
+            return None
+        wheel_vel = np.concatenate([drive_mps * np.cos(steer_rad), drive_mps * np.sin(steer_rad)])
+        return np.linalg.lstsq(self.C, wheel_vel, rcond=None)[0].tolist()
 
     def set_target_base_velocity(self, target: np.ndarray, smooth: bool = False):
         """target: np.array([vx, vy, omega]) in vehicle frame (m/s, m/s, rad/s)"""

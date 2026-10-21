@@ -17,7 +17,7 @@ to the joystick.
 
 Usage:
     python robot/teleop/nomad_teleop.py
-    python robot/teleop/nomad_teleop.py --host 192.168.0.196 --port 5005
+    python robot/teleop/nomad_teleop.py --host 192.168.123.117 --port 5005
 """
 
 import argparse
@@ -33,6 +33,7 @@ from loop_rate_limiters import RateLimiter
 from pygame.joystick import Joystick
 
 from commlink import RPCClient
+from robot.config import ORIN_IP
 
 # ---------------------------------------------------------------------------
 # Controller maps
@@ -157,7 +158,7 @@ class NoMaDJoystickNode:
         self.max_vels = [
             np.array([0.50, 0.50, 1.57]),
             np.array([0.25, 0.25, 1.57]),
-            np.array([0.75, 0.75, 1.57]),
+            np.array([1.5, 1.5, 1.57]),
         ]
         self.max_vel_setting = 0
         self.vel_alpha = vel_alpha
@@ -205,7 +206,7 @@ class NoMaDJoystickNode:
         vx = self.nomad_max_v * speed_scale * (wp[0] / mag)
         vy = self.nomad_max_v * speed_scale * (wp[1] / mag)
 
-        angle_rad = math.atan2(la[1], la[0])
+        angle_rad = math.atan2(-la[1], la[0])
         angular_w = clamp(
             -angle_rad * self.nomad_max_w * turn_scale,
             -self.nomad_max_w * turn_scale,
@@ -225,22 +226,6 @@ class NoMaDJoystickNode:
     # Debug display
     # ------------------------------------------------------------------
 
-    def _display_inputs(self):
-        print("\n" + "=" * 50)
-        print("JOYSTICK INPUTS:")
-        print("=" * 50)
-        for i in range(self.joystick.get_numaxes()):
-            print(f"  Axis {i}: {self.joystick.get_axis(i):6.3f}")
-        for i in range(self.joystick.get_numbuttons()):
-            print(f"  Button {i}: {'PRESSED' if self.joystick.get_button(i) else 'released'}")
-        num_hats = self.joystick.get_numhats()
-        for i in range(num_hats):
-            print(f"  Hat {i}: {self.joystick.get_hat(i)}")
-        print(f"CONTROL: {'RUNNING' if self.control_loop_running else 'STOPPED'}")
-        print(f"NOMAD:   {'ENABLED' if self.nomad_enabled else 'DISABLED'}")
-        print(f"SPEED:   preset {self.max_vel_setting}")
-        print("=" * 50)
-
     # ------------------------------------------------------------------
     # Main control loop
     # ------------------------------------------------------------------
@@ -249,7 +234,6 @@ class NoMaDJoystickNode:
         rate = RateLimiter(60, name="nomad_joystick")
         last_vel = np.zeros(3, dtype=float)
         last_nomad_seq = -1
-        display_counter = 0
 
         while True:
             pygame.event.pump()
@@ -258,13 +242,11 @@ class NoMaDJoystickNode:
             if not self.control_loop_running and self.joystick.get_button(controller_map["start"]):
                 self.control_loop_running = True
                 print("Control started")
-                self._display_inputs()
 
             if self.control_loop_running and self.joystick.get_button(controller_map["back"]):
                 self.control_loop_running = False
                 self.nomad_enabled = False
                 print("Control stopped")
-                self._display_inputs()
 
             if self.control_loop_running:
                 # --- A button: toggle NoMaD (edge-triggered) ---
@@ -282,15 +264,6 @@ class NoMaDJoystickNode:
                         self.max_vel_setting = (self.max_vel_setting + 1) % len(self.max_vels)
                         print("Max velocity setting:", self.max_vel_setting)
                         time.sleep(0.1)
-
-                if self.joystick.get_button(controller_map["r1"]):
-                    self._display_inputs()
-                    time.sleep(0.1)
-
-                display_counter += 1
-                if display_counter >= 300:
-                    self._display_inputs()
-                    display_counter = 0
 
                 # --- velocity source ---
                 if self.nomad_enabled:
@@ -362,8 +335,8 @@ def main():
     parser = argparse.ArgumentParser(
         description="Joystick teleop with toggleable NoMaD autonomous navigation"
     )
-    parser.add_argument("--host", default="192.168.0.196",
-                        help="NoMaD server IP (Jetson, default 192.168.0.196)")
+    parser.add_argument("--host", default=ORIN_IP,
+                        help=f"NoMaD server IP (Orin, default {ORIN_IP})")
     parser.add_argument("--port", type=int, default=5005,
                         help="NoMaD TCP port (default 5005)")
     parser.add_argument("--rpc-host", default="localhost",
