@@ -9,4 +9,4 @@
 [submodule "vr-teleop"]
 	path = vr-teleop
 	url = https://github.com/adityx23/vr-teleop.git
-	branch = pi
+	branch = sim
