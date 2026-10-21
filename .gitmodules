@@ -4,3 +4,7 @@
 [submodule "nerolib"]
 	path = nerolib
 	url = https://github.com/dk5426/nerolib
+[submodule "vr-teleop"]
+	path = vr-teleop
+	url = https://github.com/adityx23/vr-teleop.git
+	branch = pi
