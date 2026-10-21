@@ -143,6 +143,13 @@ In a separate terminal (with the same environment activated), run a teleop scrip
 python robot/teleop/telestick.py
 ```
 
+`yor_mujoco.py` serves the same RPC calls as `yor.py` on port 5557, so the robot's
+teleop clients work against it. Checks: `python robot/test_yor_mujoco.py`.
+
+**VR teleop of the sim (Quest headset):** `python robot/sim_vr_teleop.py` starts the
+sim, its stereo ZED video and the VR bridge in one go. Setup, controls and
+troubleshooting: [docs/SIM_VR_TELEOP.md](docs/SIM_VR_TELEOP.md).
+
 ---
 
 ## 3. Running Physical Robot (Linux Only)

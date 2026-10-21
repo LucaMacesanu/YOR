@@ -34,6 +34,7 @@ uv sync && source .venv/bin/activate
 ```bash
 # Simulation
 python robot/yor_mujoco.py
+python robot/sim_vr_teleop.py     # sim + Quest VR teleop (docs/SIM_VR_TELEOP.md)
 
 # Physical robot
 python robot/yor.py
@@ -80,7 +81,8 @@ CAN Bus (physical) or MuJoCo physics (simulation)
 ### Key Components
 
 - **`robot/yor.py`** — Physical robot entry point. Composes `BaseController` + optional `ArmNode` instances. Accepts `no_arms` parameter for base-only operation.
-- **`robot/yor_mujoco.py`** — Simulation entry point. Runs MuJoCo at 10 Hz, exposes same RPC interface as physical robot. Uses `SingleArmIK` instances for inverse kinematics.
+- **`robot/yor_mujoco.py`** — Simulation entry point (`--headless` for no viewer). Serves the same RPC methods as `yor.py` on port 5557, physics in `yor-description/scene-full.mjcf` stepped in real time; arms use ArmNode's IK model and home pose, so EE poses match the real robot. Also serves the neck/gripper/`get_collection_state` calls vr-teleop's `yor_bridge.py` uses, and publishes the head ZED stereo view on tcp://127.0.0.1:5560. Checks: `python robot/test_yor_mujoco.py [--rpc]`.
+- **`robot/sim_vr_teleop.py`** — VR teleop of the sim in one command (sim + video server + bridge); see `docs/SIM_VR_TELEOP.md`.
 - **`robot/base.py` / `robot/base_motor.py`** — Swerve drive base; 4 SparkFlex motors controlled via CAN bus (`sparkcan_py`).
 - **`robot/arm/arm.py`** — `ArmNode` wraps `nerolib` for Nero arm control. Supports MIT control mode (low-level PD) and joint control. Uses `mink` for IK and URDF-based gravity compensation.
 - **`robot/arm/gripper.py` / `dxl.py`** — Gripper interface; supports both Dynamixel servos and Nero-integrated grippers.
