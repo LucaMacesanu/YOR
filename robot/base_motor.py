@@ -11,7 +11,7 @@ import queue  # for queue.Empty / queue.Full
 
 from loop_rate_limiters import RateLimiter
 
-from .config import LIFT_ENABLED
+from .config import LIFT_ENABLED, LIFT_MAX_M, LIFT_MIN_M
 
 # --- New motor API ---
 from sparkcan_py import SparkFlex
@@ -435,8 +435,8 @@ class Base:
         delta_m: float,
         tolerance_m: float = 0.002,
         timeout_s: float = 30.0,
-        min_height_m: float = 0.0,
-        max_height_m: float = 0.5,
+        min_height_m: float = LIFT_MIN_M,
+        max_height_m: float = LIFT_MAX_M,
     ) -> bool:
         """
         Move lift up/down by delta in meters (positive=up, negative=down).
@@ -464,8 +464,8 @@ class Base:
         target_m: float,
         tolerance_m: float = 0.002,
         timeout_s: float = 30.0,
-        min_height_m: float = 0.0,
-        max_height_m: float = 0.5,
+        min_height_m: float = LIFT_MIN_M,
+        max_height_m: float = LIFT_MAX_M,
     ) -> bool:
         """
         Move lift to an absolute height position (blocking).

@@ -19,6 +19,7 @@ from robot.base import Base
 
 from robot.arm.arm import ArmNode
 from robot.base import BaseController
+from robot.config import LIFT_MAX_M, LIFT_MIN_M
 from commlink import RPCServer, Subscriber
 import threading
 
@@ -91,6 +92,7 @@ class YOR():
         # is missing, warn and run without it.
         self.neck = None
         self._neck_cmd = None  # last commanded {"pan", "tilt"} in degrees
+        self._lift_cmd = 0.0  # last manual lift command: +1 up, -1 down, 0 stop
         if not no_neck:
             try:
                 from robot.neck.neck import Neck
@@ -205,16 +207,19 @@ class YOR():
     def lift_up(self) -> None:
         if hasattr(self.base, "lift_up"):
             self.base.lift_up()
+            self._lift_cmd = 1.0
 
     @require_initialization
     def lift_down(self) -> None:
         if hasattr(self.base, "lift_down"):
             self.base.lift_down()
+            self._lift_cmd = -1.0
 
     @require_initialization
     def lift_stop(self) -> None:
         if hasattr(self.base, "lift_stop"):
             self.base.lift_stop()
+            self._lift_cmd = 0.0
 
     @require_initialization
     def lift_home(self) -> None:
@@ -230,8 +235,8 @@ class YOR():
         delta_m: float,
         tolerance_m: float = 0.002,
         timeout_s: float = 30.0,
-        min_height_m: float = 0.0,
-        max_height_m: float = 0.5,
+        min_height_m: float = LIFT_MIN_M,
+        max_height_m: float = LIFT_MAX_M,
     ) -> bool:
         if not hasattr(self.base, "lift_delta_height"):
             print("[YOR] base has no lift_delta_height()")
@@ -260,8 +265,8 @@ class YOR():
         target_m: float,
         tolerance_m: float = 0.002,
         timeout_s: float = 30.0,
-        min_height_m: float = 0.0,
-        max_height_m: float = 0.5,
+        min_height_m: float = LIFT_MIN_M,
+        max_height_m: float = LIFT_MAX_M,
     ) -> bool:
         if not hasattr(self.base, "lift_to_height"):
             print("[YOR] base has no lift_to_height()")
@@ -529,10 +534,11 @@ class YOR():
         Gripper values are split into measured (None if the gripper sends no live
         feedback) and commanded, so a dataset never confuses one for the other.
         enc_vel is body velocity [vx, vy, wz] from swerve forward kinematics on
-        the measured wheel encoders. No lift fields: the lift is not used.
+        the measured wheel encoders. lift_cmd is the last manual lift command
+        (+1 up, -1 down, 0 stop); the measured height is get_lift_height().
         """
         state = {"timestamp": time.time(), "base_cmd_vel": np.asarray(
-            self.base_controller.target_velocity, dtype=float).tolist()}
+            self.base_controller.target_velocity, dtype=float).tolist(), "lift_cmd": self._lift_cmd}
         state["enc_vel"] = self.base.get_measured_body_velocity()
         if self.neck is not None:
             try:

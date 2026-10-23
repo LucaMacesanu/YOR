@@ -30,6 +30,16 @@ ZED_PORT = int(os.environ.get("ZED_PORT", "6000"))
 # and every lift call is a no-op.
 LIFT_ENABLED = os.environ.get("YOR_LIFT", "1") == "1"
 
+# Lift travel and speed, measured 2026-10-23 (joystick full-range runs, 50 Hz
+# get_lift_height polling): hard stops at 0.000 m and 0.6726 m. Speed is
+# constant with no visible ramp or coast (~30 ms command lag), so for IK the
+# lift is height += rate * dt while commanded. Down is ~16% faster than up.
+# LIFT_MAX_M keeps ~1 cm off the top stop.
+LIFT_MIN_M = 0.0
+LIFT_MAX_M = 0.66
+LIFT_UP_RATE_MPS = 0.0265
+LIFT_DOWN_RATE_MPS = 0.0308
+
 # BaseController zeroes the base if no set_base_velocity() arrives within this
 # window (seconds), so a stopped or crashed teleop client can't leave it driving.
 BASE_VEL_CMD_TIMEOUT = float(os.environ.get("BASE_VEL_CMD_TIMEOUT", "0.3"))
