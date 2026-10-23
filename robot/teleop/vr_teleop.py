@@ -53,12 +53,19 @@ ARMS = ("left", "right")
 WXYZ_XYZ = ['w', 'qx', 'qy', 'qz', 'x', 'y', 'z']
 
 
+def _gripper_error(state: dict, side: str):
+    """Why state has no measured gripper opening for this arm, or None when it has one."""
+    if state.get(f"{side}_gripper") is not None:
+        return None
+    return state.get(f"{side}_gripper_error") or "no measured gripper opening from yor.py"
+
+
 def _csv_header(zed_pose: bool) -> list:
     header = ['timestamp']
     for side in ARMS:
         header += [f'{side}_ee_actual_{i}' for i in WXYZ_XYZ]
         header += [f'{side}_joint_actual_{i}' for i in range(7)]
-        header += [f'{side}_gripper_actual', f'{side}_gripper_measured']
+        header += [f'{side}_gripper_actual', f'{side}_gripper_error']
     for side in ARMS:
         header += [f'{side}_ee_target_{i}' for i in WXYZ_XYZ]
         header += [f'{side}_gripper_cmd', f'{side}_ik_ok']
@@ -319,11 +326,10 @@ class YORAdvancedTeleop:
             frame[f"{side}_ee"] = state.get(f"{side}_ee")
             frame[f"{side}_joints"] = state.get(f"{side}_joints")
             frame[f"{side}_joints_cmd"] = state.get(f"{side}_joints_cmd")  # absolute-joint action
-            # *_gripper keeps its old meaning for existing collectors (best available
-            # reading); *_gripper_measured says whether it is a real sensor value.
-            frame[f"{side}_gripper"] = measured if measured is not None else commanded
-            frame[f"{side}_gripper_measured"] = measured is not None
+            # Measured and commanded stay separate: a dropped reading is None plus an error.
+            frame[f"{side}_gripper"] = measured
             frame[f"{side}_gripper_cmd"] = commanded
+            frame[f"{side}_gripper_error"] = _gripper_error(state, side)
             frame[f"{side}_ee_target"] = ee_targets[side] if ee_targets[side] is not None else state.get(f"{side}_ee")
             frame[f"{side}_ik_ok"] = state.get(f"{side}_ik_ok")
 
@@ -366,10 +372,9 @@ class YORAdvancedTeleop:
         row = [state["timestamp"]]
         for side in ARMS:
             measured = state.get(f"{side}_gripper")
-            commanded = gripper_cmds[side] if gripper_cmds[side] is not None else state.get(f"{side}_gripper_cmd")
             row += state.get(f"{side}_ee") or [float("nan")] * 7
             row += state.get(f"{side}_joints") or [float("nan")] * 7
-            row += [measured if measured is not None else commanded, int(measured is not None)]
+            row += [float("nan") if measured is None else measured, _gripper_error(state, side) or ""]
         for side in ARMS:
             commanded = gripper_cmds[side] if gripper_cmds[side] is not None else state.get(f"{side}_gripper_cmd")
             row += ee_targets[side] if ee_targets[side] is not None else (state.get(f"{side}_ee") or [float("nan")] * 7)

@@ -555,14 +555,18 @@ class ArmNode:
             return self.can_gripper.get_position()
         return 0.0
 
-    def get_gripper_state(self) -> tuple[float | None, float | None]:
-        """(measured, commanded) opening in [0, 1]; measured is None when the
-        gripper gives no live feedback, so callers never mistake a command for a reading."""
+    def get_gripper_state(self) -> tuple[float | None, float | None, str | None]:
+        """(measured, commanded, error), openings in [0, 1]. Never filled in from each other:
+        measured is None when there is no live feedback (error then says why), commanded is
+        None while the gripper is limp / not being commanded."""
         if self.dynamixel_gripper:
-            return self.get_gripper_pose(), self.gripper_target
+            return self.get_gripper_pose(), self.gripper_target, None
         if self.can_gripper:
-            return self.can_gripper.get_measured(), self.can_gripper.get_commanded()
-        return None, None
+            measured = self.can_gripper.get_measured()
+            error = None if measured is not None else (
+                self.can_gripper.feedback_error() or "gripper feedback missing")
+            return measured, self.can_gripper.get_commanded(), error
+        return None, None, "no gripper on this arm"
 
     def update_joint_positions(self):
         if self.ik_solver is None:
@@ -576,10 +580,7 @@ class ArmNode:
     def stop(self):
         if self.can_gripper:
             try:
-                if hasattr(self.can_gripper, "enabled"):  # SameHandGripper
-                    self.can_gripper.stop()
-                else:
-                    self.can_gripper.disable()
+                self.can_gripper.stop()  # limp, then release the bus / Zenoh session
             except Exception as e:
                 print(f"[ArmNode] gripper disable failed: {e}")
             self.can_gripper = None

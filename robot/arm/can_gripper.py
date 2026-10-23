@@ -79,11 +79,19 @@ class CanGripper:
                 can_filters=[{"can_id": GRIPPER_FEEDBACK_ID, "can_mask": 0x7FF, "extended": False}],
             )
 
+    def _start_rx(self):
+        """Read 0x2A8 feedback from now until close(), limp or not."""
+        self._open_bus()
+        if self._rx_thread is None:
+            self._running_rx = True
+            self._rx_thread = threading.Thread(target=self._rx_loop, daemon=True)
+            self._rx_thread.start()
+
     def enable(self):
         """Open the bus, kick with status=3 (enable+clear), start the loop."""
         if self._running:
             return
-        self._open_bus()
+        self._start_rx()
         # Kick with ENABLE_AND_CLEAR_ERROR so the gripper activates immediately
         self._bus.send(can.Message(
             arbitration_id=GRIPPER_CMD_ID,
@@ -93,18 +101,16 @@ class CanGripper:
         time.sleep(0.05)
         self._target = 1.0
         self._running = True
-        self._running_rx = True
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
-        self._rx_thread = threading.Thread(target=self._rx_loop, daemon=True)
-        self._rx_thread.start()
 
     def disable(self) -> bool:
         """Let the gripper go limp. Returns True once its feedback confirms the driver is off.
 
         The gripper moves to the position in a disable frame (nerolib's set_gripper notes
         this too), so the frame carries the measured width: a disable never moves the jaws.
-        Works even when the gripper was left enabled with our loop stopped."""
+        Works even when the gripper was left enabled with our loop stopped. Feedback keeps
+        being read afterwards (get_measured() stays live); close() releases the bus."""
         last_target = self._target if self._target is not None else 1.0
         self._target = None
         self._running = False
@@ -112,15 +118,12 @@ class CanGripper:
             self._thread.join(timeout=1.0)
             self._thread = None
         try:
-            self._open_bus()
+            if self._rx_thread is None:  # need feedback to confirm
+                self._start_rx()
+                time.sleep(DISABLE_CONFIRM_S)
         except Exception as e:
             print(f"[CanGripper] {self._can_port}: can't open bus to disable ({e})")
             return False
-        if self._rx_thread is None:  # need feedback to confirm
-            self._running_rx = True
-            self._rx_thread = threading.Thread(target=self._rx_loop, daemon=True)
-            self._rx_thread.start()
-            time.sleep(DISABLE_CONFIRM_S)
         confirmed = False
         for _ in range(DISABLE_TRIES):
             if self._width_um is not None and time.monotonic() - self._measured_t <= FEEDBACK_STALE_S:
@@ -142,13 +145,18 @@ class CanGripper:
                 break
         if not confirmed:
             print(f"[CanGripper] {self._can_port}: gripper did not confirm disable (status {self._status})")
+        return confirmed
+
+    def close(self):
+        """Go limp, stop reading feedback and release the bus."""
+        self.disable()
         self._running_rx = False
         if self._rx_thread:
             self._rx_thread.join(timeout=1.0)
             self._rx_thread = None
-        self._bus.shutdown()
-        self._bus = None
-        return confirmed
+        if self._bus:
+            self._bus.shutdown()
+            self._bus = None
 
     def is_enabled(self) -> bool:
         """Our command loop is running (the gripper is being held at a target)."""
@@ -158,22 +166,35 @@ class CanGripper:
         """Set gripper target (0.0 = closed, 1.0 = open)."""
         self._target = max(0.0, min(1.0, pos))
 
-    def get_commanded(self) -> float:
-        return self._target if self._target is not None else 0.0
+    def get_commanded(self) -> float | None:
+        """Commanded opening (0.0 = closed, 1.0 = open), or None while limp (nothing commanded)."""
+        return self._target
 
     def get_measured(self) -> float | None:
-        """Measured opening (0.0 = closed, 1.0 = open) from 0x2A8, or None if stale."""
-        if self._measured is None or time.monotonic() - self._measured_t > FEEDBACK_STALE_S:
-            return None
-        return self._measured
+        """Measured opening (0.0 = closed, 1.0 = open) from 0x2A8; None exactly when
+        feedback_error() is not None."""
+        return None if self.feedback_error() is not None else self._measured
+
+    def feedback_error(self) -> str | None:
+        """None while get_measured() is live, otherwise why it is None."""
+        if self._rx_thread is None:
+            return f"{self._can_port}: gripper feedback not being read"
+        if self._measured is None:
+            return f"{self._can_port}: no 0x2A8 gripper feedback received"
+        age = time.monotonic() - self._measured_t
+        if age > FEEDBACK_STALE_S:
+            return f"{self._can_port}: gripper feedback stale ({age:.2f} s old)"
+        return None
 
     def get_position(self) -> float:
-        """Measured opening when feedback is live, otherwise the commanded target."""
+        """Measured opening when feedback is live, otherwise the commanded target (1.0 if limp)."""
         measured = self.get_measured()
-        return measured if measured is not None else self.get_commanded()
+        if measured is not None:
+            return measured
+        return self._target if self._target is not None else 1.0
 
     def stop(self):
-        self.disable()
+        self.close()
 
     def _loop(self):
         while self._running:

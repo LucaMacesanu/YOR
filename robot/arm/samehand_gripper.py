@@ -126,9 +126,10 @@ class SameHandGripper:
             self._target = s
 
     def get_commanded(self):
+        """Commanded opening (1 open .. 0 closed), or None while limp (nothing commanded)."""
         with self._lock:
-            t = self._target
-        return 1.0 if t is None else 1.0 - t / self.s_max
+            t, on = self._target, self._on
+        return None if t is None or not on else 1.0 - t / self.s_max
 
     def get_measured(self):
         q = self._fresh_q()
@@ -136,9 +137,18 @@ class SameHandGripper:
             return None
         return float(np.clip(1.0 - self.g.s_from_q(q, n=501) / self.s_max, 0.0, 1.0))
 
+    def feedback_error(self):
+        """None while get_measured() is live, otherwise why it is None."""
+        if self._fresh_q() is None:
+            return "SameHand: no fresh finger state from the bridge (run.sh status?)"
+        return None
+
     def get_position(self):
         m = self.get_measured()
-        return self.get_commanded() if m is None else m
+        if m is not None:
+            return m
+        c = self.get_commanded()
+        return 1.0 if c is None else c
 
     def stop(self):
         self.disable()

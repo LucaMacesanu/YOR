@@ -530,8 +530,9 @@ class YOR():
     def get_collection_state(self) -> dict:
         """Everything a data-collection frame needs, sampled in one RPC call.
 
-        Gripper values are split into measured (None if the gripper sends no live
-        feedback) and commanded, so a dataset never confuses one for the other.
+        Gripper values are never filled in from each other: {side}_gripper is the measured
+        opening (None when feedback drops, and {side}_gripper_error then says why) and
+        {side}_gripper_cmd the commanded one (None while the gripper is limp).
         enc_vel is body velocity [vx, vy, wz] from swerve forward kinematics on
         the measured wheel encoders. lift_cmd is the last manual lift command
         (+1 up, -1 down, 0 stop); the measured height is get_lift_height().
@@ -551,13 +552,14 @@ class YOR():
             return state
         for side, arm in (("left", self.left_arm), ("right", self.right_arm)):
             ee = arm.get_ee_pose()
-            measured, commanded = arm.get_gripper_state()
+            measured, commanded, gripper_error = arm.get_gripper_state()
             state[f"{side}_ee"] = ee.wxyz_xyz.tolist() if ee is not None else None
             state[f"{side}_joints"] = arm.get_joint_positions().tolist()
             q_cmd = arm.last_joint_target
             state[f"{side}_joints_cmd"] = None if q_cmd is None else q_cmd.tolist()
             state[f"{side}_gripper"] = None if measured is None else float(measured)
             state[f"{side}_gripper_cmd"] = None if commanded is None else float(commanded)
+            state[f"{side}_gripper_error"] = gripper_error
             state[f"{side}_ik_ok"] = None if arm.last_ik_solved is None else bool(arm.last_ik_solved)
         return state
 
