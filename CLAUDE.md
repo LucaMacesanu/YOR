@@ -55,6 +55,7 @@ Tests are ad-hoc scripts, not pytest-structured:
 python robot/test_gripper_can.py --can can_left
 python robot/test_lift.py [--move]          # Pico serial lift; no motion without --move
 python robot/test_gripper_pyagx.py
+python robot/test_gripper_force.py         # SameHand grip force: pad trigger + D-pad tau_max, live plot :8092, CSV
 python robot/test_left_compliant.py
 python robot/test_bimanual_keyboard_teleop.py
 python robot/arm/test_both_compliant.py

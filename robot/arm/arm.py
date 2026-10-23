@@ -71,6 +71,8 @@ class ArmNode:
         dynamixel_gripper: bool = False,
         no_gripper: bool = False,
         samehand_gripper: bool = False,
+        samehand_tau_max: float = 0.4,
+        samehand_squeeze: bool = False,
         default_kp: Optional[float | list[float]] = 15.0,
         default_kd: Optional[float | list[float]] = 0.8,
         gravity_comp_scale: float = 1.0,
@@ -228,7 +230,7 @@ class ArmNode:
             # that on the first clutch with teleop on).
             try:
                 from robot.arm.samehand_gripper import SameHandGripper
-                self.can_gripper = SameHandGripper()
+                self.can_gripper = SameHandGripper(tau_max=samehand_tau_max, squeeze=samehand_squeeze)
                 print("[ArmNode] SameHand gripper connected (limp until enable_gripper())")
             except Exception as e:
                 print(f"[ArmNode] SameHand gripper init failed ({e}). Continuing without gripper.")
@@ -352,6 +354,25 @@ class ArmNode:
         except Exception as e:
             print(f"[ArmNode] gripper enable failed: {e}")
             return False
+
+    def _samehand(self):
+        from robot.arm.samehand_gripper import SameHandGripper
+        return self.can_gripper if isinstance(self.can_gripper, SameHandGripper) else None
+
+    def set_gripper_tau_max(self, tau_max: float) -> float | None:
+        """SameHand only: grip-force ceiling (0..1 of stall). Returns the value applied."""
+        g = self._samehand()
+        return None if g is None else g.set_tau_max(tau_max)
+
+    def set_gripper_squeeze(self, squeeze: bool) -> bool | None:
+        """SameHand only: whether fully closed squeezes past the contact pose."""
+        g = self._samehand()
+        return None if g is None else g.set_squeeze(squeeze)
+
+    def get_gripper_telemetry(self) -> dict | None:
+        """SameHand only: per-joint current/effort/position/status + tau_max/squeeze."""
+        g = self._samehand()
+        return None if g is None else g.telemetry()
 
     def open_gripper(self):
         if self.dynamixel_gripper:

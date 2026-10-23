@@ -62,6 +62,10 @@ class YOR():
         no_gripper: bool = True,
         # SameHand fingers on the right arm (via the SameHand bridge over Zenoh).
         samehand_gripper: bool = True,
+        # SameHand grip-force ceiling (0..1 of stall) and whether a full close squeezes past
+        # the contact pose; both can also be changed at runtime (set_right_gripper_tau_max/_squeeze).
+        samehand_tau_max: float = 0.4,
+        samehand_squeeze: bool = False,
         no_neck: bool = False,
         # Neck servo speed limits (STS units); None = robot/neck/neck.py defaults.
         neck_servo_speed: int | None = None,
@@ -119,6 +123,8 @@ class YOR():
                 dynamixel_gripper=False,
                 no_gripper=no_gripper,
                 samehand_gripper=samehand_gripper,
+                samehand_tau_max=samehand_tau_max,
+                samehand_squeeze=samehand_squeeze,
             )
      
 
@@ -452,6 +458,27 @@ class YOR():
         return self.right_arm.enable_gripper()
 
     @require_initialization
+    def set_right_gripper_tau_max(self, tau_max: float):
+        """SameHand grip-force ceiling, 0..1 of stall (clamped 0.05..1). Returns the value applied."""
+        if self.no_arms:
+            return None
+        return self.right_arm.set_gripper_tau_max(tau_max)
+
+    @require_initialization
+    def set_right_gripper_squeeze(self, squeeze: bool):
+        """SameHand: True = a full close squeezes past the contact pose. Returns the value applied."""
+        if self.no_arms:
+            return None
+        return self.right_arm.set_gripper_squeeze(squeeze)
+
+    @require_initialization
+    def get_right_gripper_telemetry(self):
+        """SameHand per-joint current (A), effort, position, status bits, plus tau_max/squeeze."""
+        if self.no_arms:
+            return None
+        return self.right_arm.get_gripper_telemetry()
+
+    @require_initialization
     def open_right_gripper(self):
         if self.no_arms:
             print("right arm disabled")
@@ -664,6 +691,10 @@ def main():
                         help='No effect; the AgileX gripper is already off by default')
     parser.add_argument('--no-samehand', action='store_true',
                         help='Run without the SameHand fingers on the right arm')
+    parser.add_argument('--samehand-tau-max', type=float, default=0.4,
+                        help='SameHand grip-force ceiling, 0..1 of stall (default 0.4; SameHand default 0.6)')
+    parser.add_argument('--samehand-squeeze', action='store_true',
+                        help='Full trigger squeezes past the contact pose (default: closes to touching)')
     parser.add_argument('--no-arms', action='store_true', help='Disable arm initialization (base-only mode)')
     parser.add_argument('--no-neck', action='store_true', help='Run without the Feetech neck')
     parser.add_argument('--neck-servo-speed', type=int, default=None,
@@ -673,7 +704,8 @@ def main():
     args = parser.parse_args()
 
     yor = YOR(no_arms=args.no_arms, no_gripper=not args.agx_gripper,
-              samehand_gripper=not args.no_samehand, no_neck=args.no_neck,
+              samehand_gripper=not args.no_samehand, samehand_tau_max=args.samehand_tau_max,
+              samehand_squeeze=args.samehand_squeeze, no_neck=args.no_neck,
               neck_servo_speed=args.neck_servo_speed, neck_servo_accel=args.neck_servo_accel)
     yor.init()
     server = RPCServer(yor, port=YOR_PORT, threaded=True)

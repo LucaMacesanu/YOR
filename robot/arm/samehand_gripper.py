@@ -59,13 +59,15 @@ class SameHandGripper:
                  runs on another host.
         """
         self.g = grip.GripInterpolator.load()  # device/onboard/robot/grip_waypoints.json
+        self.squeeze = bool(squeeze)
         self.s_max = 1.0 if squeeze else self.g.contact_s
-        self.tau_max, self.dq_max, self.slew, self.hz = tau_max, dq_max, slew, cmd_hz
+        self.tau_max, self.dq_max, self.slew, self.hz = float(tau_max), dq_max, slew, cmd_hz
 
         self._lock = threading.Lock()  # state + targets
         self._pub_lock = threading.Lock()  # one publisher at a time (loop vs disable)
         self._q = None
         self._sts = None
+        self._state = None  # last full State message, see telemetry()
         self._q_t = 0.0
         self._target = None  # grip value s (0 open .. s_max closed)
         self._cmd = None  # slew-limited s actually sent
@@ -156,6 +158,32 @@ class SameHandGripper:
     def enabled(self):
         return self._on
 
+    def set_tau_max(self, tau_max):
+        """Effort ceiling, 0..1 of stall; applies from the next command (<= 10 ms)."""
+        self.tau_max = float(np.clip(tau_max, 0.05, 1.0))
+        return self.tau_max
+
+    def set_squeeze(self, squeeze):
+        """True: fully closed = full press (s = 1); False: fully closed = touching (contact_s).
+        The current target keeps its grip value s, so toggling never moves the fingers."""
+        with self._lock:
+            self.squeeze = bool(squeeze)
+            self.s_max = 1.0 if self.squeeze else self.g.contact_s
+            if self._target is not None:
+                self._target = min(self._target, self.s_max)
+        return self.squeeze
+
+    def telemetry(self):
+        """Last finger state from the bridge plus our command side; None if no fresh state."""
+        with self._lock:
+            st, t, target, cmd = self._state, self._q_t, self._target, self._cmd
+        if st is None or time.monotonic() - t > STATE_FRESH_S:
+            return None
+        st = dict(st)
+        st.update(enabled=self._on, tau_max=self.tau_max, squeeze=self.squeeze,
+                  contact_s=float(self.g.contact_s), s_target=target, s_cmd=cmd)
+        return st
+
     def faults(self):
         """Per-joint HLS status bits; nonzero = servo protection tripped (bit 3 = overcurrent)."""
         with self._lock:
@@ -177,6 +205,10 @@ class SameHandGripper:
         with self._lock:
             self._q = np.array([x.position for x in a])
             self._sts = [int(x.status) for x in a]
+            self._state = {"t_us": int(m.t_us), "torque_on": bool(m.torque_on),
+                           **{k: [float(getattr(x, k)) for x in a] for k in
+                              ("position", "velocity", "effort", "current", "voltage", "temperature")},
+                           "status": list(self._sts)}
             self._q_t = time.monotonic()
 
     def _publish(self, q):
