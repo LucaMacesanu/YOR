@@ -56,12 +56,11 @@ class YOR():
         base_max_vel=np.array((1.0, 1.0, 1.57)),
         base_max_accel=np.array((1.0, 1.0, 1.57)),
         no_arms: bool = False,
-        # AgileX gripper code (CanGripper, CAN 0x159/0x2A8) is off by default:
-        # the right arm has a custom gripper and the left gripper is removed
-        # (2026-10-19). Pass no_gripper=False / --agx-gripper to turn it back on.
-        no_gripper: bool = True,
-        # SameHand fingers on the right arm (via the SameHand bridge over Zenoh).
-        samehand_gripper: bool = True,
+        # AgileX CAN grippers (CanGripper, CAN 0x159/0x2A8) on both arms.
+        no_gripper: bool = False,
+        # SameHand fingers on the right arm instead (via the SameHand bridge over Zenoh);
+        # the SameHand setup lives on the umami branch.
+        samehand_gripper: bool = False,
         no_neck: bool = False,
         # Neck servo speed limits (STS units); None = robot/neck/neck.py defaults.
         neck_servo_speed: int | None = None,
@@ -340,11 +339,11 @@ class YOR():
 
     @require_initialization
     def enable_left_gripper(self):
-        """Re-enable the left gripper after disable_left_gripper()."""
+        """Re-enable the left gripper after disable_left_gripper(). Returns True on success."""
         if self.no_arms:
             print("left arm disabled")
-            return
-        self.left_arm.enable_gripper()
+            return False
+        return self.left_arm.enable_gripper()
 
     @require_initialization
     def open_left_gripper(self):
@@ -658,12 +657,10 @@ def main():
     import argparse
     import signal
     parser = argparse.ArgumentParser()
-    parser.add_argument('--agx-gripper', action='store_true',
-                        help='Enable the AgileX CAN gripper code (off by default)')
     parser.add_argument('--no-gripper', action='store_true',
-                        help='No effect; the AgileX gripper is already off by default')
-    parser.add_argument('--no-samehand', action='store_true',
-                        help='Run without the SameHand fingers on the right arm')
+                        help='Run without the AgileX CAN grippers')
+    parser.add_argument('--samehand', action='store_true',
+                        help='SameHand fingers on the right arm instead of its AgileX gripper')
     parser.add_argument('--no-arms', action='store_true', help='Disable arm initialization (base-only mode)')
     parser.add_argument('--no-neck', action='store_true', help='Run without the Feetech neck')
     parser.add_argument('--neck-servo-speed', type=int, default=None,
@@ -672,8 +669,8 @@ def main():
                         help='Neck servo acceleration, 0-254 in 100 steps/s^2 (default 80; 0 = no limit)')
     args = parser.parse_args()
 
-    yor = YOR(no_arms=args.no_arms, no_gripper=not args.agx_gripper,
-              samehand_gripper=not args.no_samehand, no_neck=args.no_neck,
+    yor = YOR(no_arms=args.no_arms, no_gripper=args.no_gripper,
+              samehand_gripper=args.samehand, no_neck=args.no_neck,
               neck_servo_speed=args.neck_servo_speed, neck_servo_accel=args.neck_servo_accel)
     yor.init()
     server = RPCServer(yor, port=YOR_PORT, threaded=True)

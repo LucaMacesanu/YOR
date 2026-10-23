@@ -20,16 +20,15 @@ Teleop starts OFF. Controls:
   right stick click     episode start / end as success;  left stick click  end as fail
   left stick (teleop off)  move the headset HUD up/down
                         (teleop on or off, so policy rollouts can be marked too)
-  right trigger         SameHand fingers: 0 open .. full pull = closed (touching)
+  trigger               that arm's AgileX gripper: 0 open .. full pull = closed
   A + Y (hold)          lift down;  X + B (hold) lift up;  release stops
-The lift's automatic head-height retargeting stays off. The left trigger is unused (no left gripper).
+The lift's automatic head-height retargeting stays off.
 The Pico lift keeps moving until it gets "stop": the bridge sends stop on release, teleop off,
 stale/lost headset, home, and exit -- but a hard crash (kill -9) mid-move would not.
 
-SameHand fingers: start the hand first (~/SameHand-UMI/device/software/run.sh start calib
-bridge). They stay limp until the first right-arm clutch with teleop on, then hold their last
-target while unclutched (so a grasp survives a re-clutch), and go limp again when teleop turns
-off, on home, on headset disconnect, and when this script exits. --no-gripper leaves them alone.
+Grippers stay limp until that arm's first clutch with teleop on, then hold their last target
+while unclutched (so a grasp survives a re-clutch), and go limp again when teleop turns off, on
+home, on headset disconnect, and when this script exits. --no-gripper leaves them alone.
 
 Episodes go out on ZMQ :5558 (EPISODE_PUB_PORT), same topics as robot/teleop/vr_teleop.py:
 episode/signal + teleop/episode_result on start/end, and a 30 Hz teleop/episode robot-state
