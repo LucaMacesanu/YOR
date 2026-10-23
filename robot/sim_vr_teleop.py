@@ -75,7 +75,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--ip", default=None, help="LAN IP the headset uses to reach this machine (default: detected)")
     parser.add_argument("--headless", action="store_true", help="no MuJoCo viewer window")
-    parser.add_argument("--gripper", choices=("custom", "agx"), default="custom",
+    parser.add_argument("--gripper", choices=("custom", "agx"), default="agx",
                         help="custom: the new grippers; agx: the stock AgileX grippers")
     parser.add_argument("--vr-teleop", default=str(REPO / "vr-teleop"), help="vr-teleop checkout (default: the submodule)")
     args = parser.parse_args()

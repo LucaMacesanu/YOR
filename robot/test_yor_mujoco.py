@@ -110,7 +110,7 @@ def main():
     parser.add_argument("--rpc", action="store_true", help="test a running yor_mujoco.py over commlink")
     parser.add_argument("--host", default="localhost")
     parser.add_argument("--port", type=int, default=5557)
-    parser.add_argument("--gripper", choices=("custom", "agx"), default="custom", help="model to test (not with --rpc)")
+    parser.add_argument("--gripper", choices=("custom", "agx"), default="agx", help="model to test (not with --rpc)")
     args = parser.parse_args()
 
     if args.rpc:

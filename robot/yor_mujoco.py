@@ -3,7 +3,7 @@ MuJoCo stand-in for robot/yor.py: serves the same RPC methods on the same port
 (5557), so teleop clients (telestick, joystick, vr_teleop, yor_teleop, ...) run
 against the simulation unchanged.
 
-    python robot/yor_mujoco.py [--headless] [--port 5557] [--gripper custom|agx]
+    python robot/yor_mujoco.py [--headless] [--port 5557] [--gripper agx|custom]
 
 Physics model: yor-description/scene-full.mjcf (swerve base, lift, Nero arms,
 grippers, pan/tilt head with ZED cameras); --gripper agx loads scene-full-agx.mjcf,
@@ -750,7 +750,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--headless", action="store_true", help="no viewer window")
     parser.add_argument("--port", type=int, default=YOR_PORT)
-    parser.add_argument("--gripper", choices=sorted(SIM_MODELS), default="custom",
+    parser.add_argument("--gripper", choices=sorted(SIM_MODELS), default="agx",
                         help="custom: the new grippers (scene-full.mjcf); agx: stock AgileX (scene-full-agx.mjcf)")
     parser.add_argument("--model", default=None, help="physics MJCF (overrides --gripper)")
     parser.add_argument("--no-video", action="store_true", help=f"don't publish ZED frames on {VIDEO_PUB_ADDR}")
