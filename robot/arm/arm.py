@@ -288,6 +288,8 @@ class ArmNode:
         
 
     def home(self, gripper_target: float = 1.0):
+        """Home the arm. A CAN/SameHand gripper goes limp (gripper_target only applies to the
+        Dynamixel gripper); the next gripper command re-enables it."""
         if self.nero:
             try:
                 self.nero.reset_to_home()
@@ -298,8 +300,8 @@ class ArmNode:
         if self.dynamixel_gripper:
             self.gripper.move_to_pos(int(gripper_target * self.gripper_range + self.close_gripper_value))
         elif self.can_gripper:
-            print(f"[ArmNode] {arm_side} gripper: set_position({gripper_target})")
-            self.can_gripper.set_position(float(gripper_target))
+            print(f"[ArmNode] {arm_side} gripper: limp")
+            self.disable_gripper()
         else:
             print(f"[ArmNode] {arm_side} gripper: can_gripper is None, skipping")
         time.sleep(2.0)
@@ -335,7 +337,13 @@ class ArmNode:
             if self.dynamixel_gripper:
                 self.gripper.move_to_pos(int(gripper_target * self.gripper_range + self.close_gripper_value))
             elif self.can_gripper:
-                self.can_gripper.set_position(float(gripper_target))
+                self._can_gripper_to(float(gripper_target))
+
+    def _can_gripper_to(self, pos: float):
+        """Command the CAN gripper, re-enabling it first if it was left limp (e.g. by home())."""
+        if isinstance(self.can_gripper, CanGripper) and not self.can_gripper.is_enabled():
+            self.enable_gripper()
+        self.can_gripper.set_position(pos)
 
     def disable_gripper(self):
         """Let the gripper go limp without touching arm joint control (for hardware debugging/calibration)."""
@@ -357,13 +365,13 @@ class ArmNode:
         if self.dynamixel_gripper:
             self.gripper.move_to_pos(self.open_gripper_value)
         elif self.can_gripper:
-            self.can_gripper.set_position(1.0)
+            self._can_gripper_to(1.0)
 
     def close_gripper(self):
         if self.dynamixel_gripper:
             self.gripper.move_to_pos(self.close_gripper_value)
         elif self.can_gripper:
-            self.can_gripper.set_position(0.0)
+            self._can_gripper_to(0.0)
 
     def set_ee_target(self, ee_target: mink.SE3, gripper_target: Optional[float] = None, preview_time: float = 0.0):
         if self.ik_solver is None:
@@ -419,7 +427,7 @@ class ArmNode:
         if self.dynamixel_gripper:
             self.gripper.move_to_pos(int(gripper_pos * self.gripper_range + self.close_gripper_value))
         elif self.can_gripper:
-            self.can_gripper.set_position(float(gripper_pos))
+            self._can_gripper_to(float(gripper_pos))
 
     def set_gain(self, kp, kd):
         """

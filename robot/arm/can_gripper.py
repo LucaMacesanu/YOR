@@ -7,6 +7,10 @@ GRIPPER_CMD_ID = 0x159
 GRIPPER_FEEDBACK_ID = 0x2A8   # int32 BE width (um) | int16 force (mN) | status | mode
 GRIPPER_STROKE_M = 0.07       # full travel; matches the 0.07 scale in _make_frame
 FEEDBACK_STALE_S = 0.25       # treat feedback older than this as missing
+STATUS_DRIVER_ENABLED = 0x40  # 0x2A8 byte 6, bit 6 (nerolib GripperStatus.driver_enable_status)
+DISABLE_AND_CLEAR_ERROR = 0x02  # plain DISABLE (0x00) was ignored by the right gripper on 2026-10-23
+DISABLE_TRIES = 5
+DISABLE_CONFIRM_S = 0.1       # wait this long for the enable bit to drop before resending
 EFFORT = 0.4  # 0-1, maps to 0-5 Nm; lower = less grip force
 
 # The nominal position=0.0/1.0 (fully closed/open) endpoints land a little short
@@ -50,11 +54,15 @@ class CanGripper:
         self._open_overtravel = open_overtravel
         self._target: float | None = None
         self._running = False
+        self._running_rx = False
         self._bus: can.interface.Bus | None = None
         self._thread: threading.Thread | None = None
         self._rx_thread: threading.Thread | None = None
         self._measured: float | None = None
         self._measured_t = 0.0
+        self._width_um: int | None = None  # raw width from the last 0x2A8 frame
+        self._status: int | None = None    # status byte from the last 0x2A8 frame
+        self._status_t = 0.0
 
     def _frame(self, position: float, status_code: int, effort: float = EFFORT) -> bytes:
         return _make_frame(
@@ -62,16 +70,20 @@ class CanGripper:
             close_overtravel=self._close_overtravel, open_overtravel=self._open_overtravel,
         )
 
+    def _open_bus(self):
+        if self._bus is None:
+            # The filter only affects what this socket receives; we never need to
+            # read anything but the gripper's own feedback frame.
+            self._bus = can.interface.Bus(
+                channel=self._can_port, interface="socketcan",
+                can_filters=[{"can_id": GRIPPER_FEEDBACK_ID, "can_mask": 0x7FF, "extended": False}],
+            )
+
     def enable(self):
         """Open the bus, kick with status=3 (enable+clear), start the loop."""
         if self._running:
             return
-        # The filter only affects what this socket receives; we never need to
-        # read anything but the gripper's own feedback frame.
-        self._bus = can.interface.Bus(
-            channel=self._can_port, interface="socketcan",
-            can_filters=[{"can_id": GRIPPER_FEEDBACK_ID, "can_mask": 0x7FF, "extended": False}],
-        )
+        self._open_bus()
         # Kick with ENABLE_AND_CLEAR_ERROR so the gripper activates immediately
         self._bus.send(can.Message(
             arbitration_id=GRIPPER_CMD_ID,
@@ -81,34 +93,66 @@ class CanGripper:
         time.sleep(0.05)
         self._target = 1.0
         self._running = True
+        self._running_rx = True
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
         self._rx_thread = threading.Thread(target=self._rx_loop, daemon=True)
         self._rx_thread.start()
 
-    def disable(self):
-        """Stop the loop and send status=0 frames to let the gripper go limp."""
+    def disable(self) -> bool:
+        """Let the gripper go limp. Returns True once its feedback confirms the driver is off.
+
+        The gripper moves to the position in a disable frame (nerolib's set_gripper notes
+        this too), so the frame carries the measured width: a disable never moves the jaws.
+        Works even when the gripper was left enabled with our loop stopped."""
+        last_target = self._target if self._target is not None else 1.0
         self._target = None
         self._running = False
         if self._thread:
             self._thread.join(timeout=1.0)
             self._thread = None
+        try:
+            self._open_bus()
+        except Exception as e:
+            print(f"[CanGripper] {self._can_port}: can't open bus to disable ({e})")
+            return False
+        if self._rx_thread is None:  # need feedback to confirm
+            self._running_rx = True
+            self._rx_thread = threading.Thread(target=self._rx_loop, daemon=True)
+            self._rx_thread.start()
+            time.sleep(DISABLE_CONFIRM_S)
+        confirmed = False
+        for _ in range(DISABLE_TRIES):
+            if self._width_um is not None and time.monotonic() - self._measured_t <= FEEDBACK_STALE_S:
+                data = struct.pack(">iH", self._width_um, 0) + bytes([DISABLE_AND_CLEAR_ERROR, 0x00])
+            else:  # no feedback: last commanded opening, kept off the overtravel endpoints
+                data = self._frame(min(0.99, max(0.01, last_target)), DISABLE_AND_CLEAR_ERROR, effort=0.0)
+            try:
+                self._bus.send(can.Message(arbitration_id=GRIPPER_CMD_ID, data=data, is_extended_id=False))
+            except Exception as e:
+                print(f"[CanGripper] {self._can_port}: disable frame send failed ({e})")
+            t_sent = time.monotonic()
+            while time.monotonic() - t_sent < DISABLE_CONFIRM_S:
+                time.sleep(0.01)
+                if (self._status_t > t_sent and self._status is not None
+                        and not self._status & STATUS_DRIVER_ENABLED):
+                    confirmed = True
+                    break
+            if confirmed:
+                break
+        if not confirmed:
+            print(f"[CanGripper] {self._can_port}: gripper did not confirm disable (status {self._status})")
+        self._running_rx = False
         if self._rx_thread:
             self._rx_thread.join(timeout=1.0)
             self._rx_thread = None
-        if self._bus:
-            for _ in range(10):
-                try:
-                    self._bus.send(can.Message(
-                        arbitration_id=GRIPPER_CMD_ID,
-                        data=self._frame(0.0, status_code=0, effort=0.0),
-                        is_extended_id=False,
-                    ))
-                except Exception:
-                    pass
-                time.sleep(0.005)
-            self._bus.shutdown()
-            self._bus = None
+        self._bus.shutdown()
+        self._bus = None
+        return confirmed
+
+    def is_enabled(self) -> bool:
+        """Our command loop is running (the gripper is being held at a target)."""
+        return self._running
 
     def set_position(self, pos: float):
         """Set gripper target (0.0 = closed, 1.0 = open)."""
@@ -146,7 +190,7 @@ class CanGripper:
             time.sleep(0.005)  # 200 Hz
 
     def _rx_loop(self):
-        while self._running:
+        while self._running_rx:
             bus = self._bus
             if bus is None:
                 break
@@ -156,9 +200,11 @@ class CanGripper:
                 continue
             if msg is None or msg.arbitration_id != GRIPPER_FEEDBACK_ID or len(msg.data) < 8:
                 continue
+            self._status, self._status_t = msg.data[6], time.monotonic()
             if msg.data[7] != 0x00:  # 0x01 = angle mode; we only command width
                 continue
-            width_m = struct.unpack(">i", bytes(msg.data[0:4]))[0] * 1e-6
+            self._width_um = struct.unpack(">i", bytes(msg.data[0:4]))[0]
+            width_m = self._width_um * 1e-6
             p = width_m / GRIPPER_STROKE_M
             pos = (1.0 - p) if self._inverted else p
             self._measured = max(0.0, min(1.0, pos))
