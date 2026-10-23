@@ -10,6 +10,7 @@ Start robot/yor.py first, then:
     python robot/whole_body_teleop.py --dry-run       # no robot: print commands only
     python robot/whole_body_teleop.py --task "pick up the cup"   # task prompt sent with each episode
     # headset browser: open the URL this prints -> accept cert -> Enter VR
+    # laptop browser: https://<pi-ip>:8443/monitor -> read-only live view of everything
 
 Teleop starts OFF. Controls:
   A + X (one per hand), tap   teleop on/off  (off: arms hold, base stops, neck holds)
