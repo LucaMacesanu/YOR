@@ -8,6 +8,7 @@ Start robot/yor.py first, then:
     python robot/whole_body_teleop.py                 # live: neck + arms + base + lift + gripper
     python robot/whole_body_teleop.py --no-arms       # leave out arms (or --no-base / --no-neck / --no-lift)
     python robot/whole_body_teleop.py --dry-run       # no robot: print commands only
+    python robot/whole_body_teleop.py --task "pick up the cup"   # task prompt sent with each episode
     # headset browser: open the URL this prints -> accept cert -> Enter VR
 
 Teleop starts OFF. Controls:
@@ -15,7 +16,10 @@ Teleop starts OFF. Controls:
   A + X, hold 1.5 s           home both arms + neck, teleop off
   grip (hold)                 move that arm; release and it holds
   B + Y (one per hand)        base mode on/off;  left stick drive, right stick turn
-  head                  neck pan/tilt;  left stick click re-centers
+  head                  neck pan/tilt; straight ahead re-zeroes each time teleop turns on
+  right stick click     episode start / end as success;  left stick click  end as fail
+  left stick (teleop off)  move the headset HUD up/down
+                        (teleop on or off, so policy rollouts can be marked too)
   right trigger         SameHand fingers: 0 open .. full pull = closed (touching)
   A + Y (hold)          lift down;  X + B (hold) lift up;  release stops
 The lift's automatic head-height retargeting stays off. The left trigger is unused (no left gripper).
@@ -27,6 +31,12 @@ bridge). They stay limp until the first right-arm clutch with teleop on, then ho
 target while unclutched (so a grasp survives a re-clutch), and go limp again when teleop turns
 off, on home, on headset disconnect, and when this script exits. --no-gripper leaves them alone.
 
+Episodes go out on ZMQ :5558 (EPISODE_PUB_PORT), same topics as robot/teleop/vr_teleop.py:
+episode/signal + teleop/episode_result on start/end, and a 30 Hz teleop/episode robot-state
+frame in between, for the Orin collector. Each episode is also saved compressed as
+teleop_data/episodes/<episode_id>.yep (read: python vr-teleop/server/episode_store.py FILE).
+Don't run vr_teleop.py at the same time (same port).
+
 Needs: aiohttp, mink (yor-nero env) and the openssl CLI (self-signed cert).
 """
 import os
@@ -37,11 +47,14 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "vr-teleop" / "server"))
 sys.path.insert(1, str(REPO))
 
-from robot.config import ORIN_IP  # noqa: E402
+from robot.config import EPISODE_PUB_HOST, EPISODE_PUB_PORT, ORIN_IP  # noqa: E402
 import yor_bridge  # noqa: E402  (vr-teleop/server/yor_bridge.py)
 
 if __name__ == "__main__":
     yor_bridge.main(
         default_video=os.environ.get("VR_VIDEO", f"{ORIN_IP}:8444"),
         neck_calib=str(REPO / "robot" / "neck" / "neck_calibration.json"),
+        episode_host=EPISODE_PUB_HOST,
+        episode_port=EPISODE_PUB_PORT,
+        episode_dir=str(REPO / "teleop_data" / "episodes"),
     )
