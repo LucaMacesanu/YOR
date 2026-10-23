@@ -57,4 +57,5 @@ if __name__ == "__main__":
         episode_host=EPISODE_PUB_HOST,
         episode_port=EPISODE_PUB_PORT,
         episode_dir=str(REPO / "teleop_data" / "episodes"),
+        gripper_sides=("right",),  # SameHand on the right arm; the left gripper is removed
     )
