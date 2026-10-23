@@ -330,7 +330,8 @@ class YORAdvancedTeleop:
             frame[f"{side}_gripper"] = measured
             frame[f"{side}_gripper_cmd"] = commanded
             frame[f"{side}_gripper_error"] = _gripper_error(state, side)
-            frame[f"{side}_ee_target"] = ee_targets[side] if ee_targets[side] is not None else state.get(f"{side}_ee")
+            frame[f"{side}_ee_target"] = ee_targets[side]  # None when not engaged; never the measured pose
+            frame[f"{side}_ee_target_error"] = None if ee_targets[side] is not None else f"{side} arm not engaged"
             frame[f"{side}_ik_ok"] = state.get(f"{side}_ik_ok")
 
         # ZED base pose (global, from the ZED's visual-inertial tracking). None until
@@ -377,7 +378,7 @@ class YORAdvancedTeleop:
             row += [float("nan") if measured is None else measured, _gripper_error(state, side) or ""]
         for side in ARMS:
             commanded = gripper_cmds[side] if gripper_cmds[side] is not None else state.get(f"{side}_gripper_cmd")
-            row += ee_targets[side] if ee_targets[side] is not None else (state.get(f"{side}_ee") or [float("nan")] * 7)
+            row += ee_targets[side] if ee_targets[side] is not None else [float("nan")] * 7
             ik_ok = state.get(f"{side}_ik_ok")
             row += [commanded, "" if ik_ok is None else int(ik_ok)]
         row += base_cmd.tolist()
