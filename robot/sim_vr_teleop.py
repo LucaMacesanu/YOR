@@ -75,6 +75,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--ip", default=None, help="LAN IP the headset uses to reach this machine (default: detected)")
     parser.add_argument("--headless", action="store_true", help="no MuJoCo viewer window")
+    parser.add_argument("--gripper", choices=("custom", "agx"), default="custom",
+                        help="custom: the new grippers; agx: the stock AgileX grippers")
     parser.add_argument("--vr-teleop", default=str(REPO / "vr-teleop"), help="vr-teleop checkout (default: the submodule)")
     args = parser.parse_args()
 
@@ -91,7 +93,8 @@ def main():
     py = [sys.executable, "-u"]
     procs = []
     try:
-        sim = subprocess.Popen(py + [str(REPO / "robot" / "yor_mujoco.py")] + (["--headless"] if args.headless else []),
+        sim = subprocess.Popen(py + [str(REPO / "robot" / "yor_mujoco.py"), "--gripper", args.gripper]
+                               + (["--headless"] if args.headless else []),
                                cwd=REPO)
         procs.append(sim)
         wait_for_port(RPC_PORT, sim, "yor_mujoco.py")

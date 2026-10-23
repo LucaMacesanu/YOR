@@ -3,10 +3,11 @@ MuJoCo stand-in for robot/yor.py: serves the same RPC methods on the same port
 (5557), so teleop clients (telestick, joystick, vr_teleop, yor_teleop, ...) run
 against the simulation unchanged.
 
-    python robot/yor_mujoco.py [--headless] [--port 5557]
+    python robot/yor_mujoco.py [--headless] [--port 5557] [--gripper custom|agx]
 
 Physics model: yor-description/scene-full.mjcf (swerve base, lift, Nero arms,
-grippers, pan/tilt head with ZED cameras). Where a client can observe it, the
+grippers, pan/tilt head with ZED cameras); --gripper agx loads scene-full-agx.mjcf,
+the same robot with the stock AgileX parallel-jaw grippers (make_agx_variant.py). Where a client can observe it, the
 sim behaves like the real robot:
   - arms: the same IK model and solver as ArmNode (nero-welded-base-and-lift.mjcf,
     SingleArmIK), the same home pose, and joint targets reached over
@@ -54,6 +55,10 @@ from robot.arm.ik_solver import SingleArmIK  # noqa: E402
 
 YOR_PORT = 5557
 SIM_MODEL = _HERE / "yor-description" / "scene-full.mjcf"
+SIM_MODELS = {  # --gripper choice -> physics model
+    "custom": SIM_MODEL,
+    "agx": _HERE / "yor-description" / "scene-full-agx.mjcf",  # stock AgileX grippers
+}
 IK_MODEL = _HERE / "yor-description" / "nero-welded-base-and-lift.mjcf"  # same as yor.py
 
 CONTROL_HZ = 100  # command updates per second; physics substeps fill the gap
@@ -128,10 +133,22 @@ class _SimArm:
         self.qpos_adr = np.array([model.jnt_qposadr[model.joint(n).id] for n in joint_names])
         self.act_ids = np.array([model.actuator(n + "_pos").id for n in joint_names])
 
-        self.finger_adr = model.jnt_qposadr[model.joint(f"{side}_gripper_joint1").id]
-        self.finger_act = model.actuator(f"{side}_gripper_joint1_pos").id
-        self.knuckle_act = model.actuator(f"{side}_gripper_joint2_pos").id
-        self.finger_closed = GRIPPER_CLOSED_FRACTION * model.jnt_range[model.joint(f"{side}_gripper_joint1").id][1]
+        # (actuator id, ctrl at open, ctrl at closed) per gripper actuator; the first
+        # one's joint reads back the gripper position
+        try:
+            # AgileX parallel jaw (scene-full-agx.mjcf): two sliding fingers, 0 = closed
+            fingers = [model.joint(f"{side}_gripper_finger_{f}") for f in "ab"]
+            self.gripper_acts = [(model.actuator(j.name + "_pos").id, model.jnt_range[j.id][1], 0.0) for j in fingers]
+            self.finger_adr = model.jnt_qposadr[fingers[0].id]
+        except KeyError:
+            # custom gripper (scene-full.mjcf): finger joint1 closes, knuckle joint2 held at 0
+            finger = model.joint(f"{side}_gripper_joint1")
+            self.gripper_acts = [
+                (model.actuator(f"{side}_gripper_joint1_pos").id, 0.0, GRIPPER_CLOSED_FRACTION * model.jnt_range[finger.id][1]),
+                (model.actuator(f"{side}_gripper_joint2_pos").id, 0.0, 0.0),
+            ]
+            self.finger_adr = model.jnt_qposadr[finger.id]
+        _, self.finger_open, self.finger_closed = self.gripper_acts[0]
 
         self.q_cmd = HOME_Q[side].copy()  # interpolated command sent to the actuators
         self.q_goal = HOME_Q[side].copy()
@@ -156,11 +173,12 @@ class _SimArm:
 
         g_step = GRIPPER_SPEED * dt
         self.gripper_cmd += float(np.clip(self.gripper_goal - self.gripper_cmd, -g_step, g_step))
-        data.ctrl[self.finger_act] = (1.0 - self.gripper_cmd) * self.finger_closed
-        data.ctrl[self.knuckle_act] = 0.0
+        for act, q_open, q_closed in self.gripper_acts:
+            data.ctrl[act] = q_closed + self.gripper_cmd * (q_open - q_closed)
 
     def gripper_position(self, data):
-        return float(np.clip(1.0 - data.qpos[self.finger_adr] / self.finger_closed, 0.0, 1.0))
+        q = data.qpos[self.finger_adr]
+        return float(np.clip((q - self.finger_closed) / (self.finger_open - self.finger_closed), 0.0, 1.0))
 
 
 class YORMujoco:
@@ -732,11 +750,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--headless", action="store_true", help="no viewer window")
     parser.add_argument("--port", type=int, default=YOR_PORT)
-    parser.add_argument("--model", default=str(SIM_MODEL), help="physics MJCF (default: scene-full.mjcf)")
+    parser.add_argument("--gripper", choices=sorted(SIM_MODELS), default="custom",
+                        help="custom: the new grippers (scene-full.mjcf); agx: stock AgileX (scene-full-agx.mjcf)")
+    parser.add_argument("--model", default=None, help="physics MJCF (overrides --gripper)")
     parser.add_argument("--no-video", action="store_true", help=f"don't publish ZED frames on {VIDEO_PUB_ADDR}")
     args = parser.parse_args()
 
-    yor = YORMujoco(model_path=args.model, headless=args.headless)
+    yor = YORMujoco(model_path=args.model or SIM_MODELS[args.gripper], headless=args.headless)
     yor.init()
     video = None if args.no_video else StereoPublisher(yor)
     if video:

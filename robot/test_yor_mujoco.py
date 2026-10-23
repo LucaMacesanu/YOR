@@ -2,6 +2,7 @@
 Checks for the simulated robot (robot/yor_mujoco.py), no hardware needed:
 
     python robot/test_yor_mujoco.py          # drives YORMujoco directly, headless
+    python robot/test_yor_mujoco.py --gripper agx   # same, with the stock AgileX grippers
     python robot/test_yor_mujoco.py --rpc    # same checks through commlink, against a
                                              # running `python robot/yor_mujoco.py`
 
@@ -109,6 +110,7 @@ def main():
     parser.add_argument("--rpc", action="store_true", help="test a running yor_mujoco.py over commlink")
     parser.add_argument("--host", default="localhost")
     parser.add_argument("--port", type=int, default=5557)
+    parser.add_argument("--gripper", choices=("custom", "agx"), default="custom", help="model to test (not with --rpc)")
     args = parser.parse_args()
 
     if args.rpc:
@@ -116,9 +118,9 @@ def main():
 
         ok = run(RPCClient(args.host, args.port))
     else:
-        from robot.yor_mujoco import YORMujoco
+        from robot.yor_mujoco import SIM_MODELS, YORMujoco
 
-        yor = YORMujoco(headless=True)
+        yor = YORMujoco(model_path=SIM_MODELS[args.gripper], headless=True)
         yor.init()
         try:
             ok = run(yor)

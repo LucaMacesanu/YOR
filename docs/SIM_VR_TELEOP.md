@@ -55,6 +55,7 @@ Quest headset (WebXR page)
 
 ```bash
 python robot/sim_vr_teleop.py            # add --headless for no viewer window
+python robot/sim_vr_teleop.py --gripper agx   # same robot with the stock AgileX grippers
 ```
 
 It detects this machine's LAN IP (override with `--ip <ip>`), makes a
@@ -116,8 +117,14 @@ logs button presses and what it sends.
   measured). The sim's travel is 0..1.2 m; the HUD bar assumes 0..0.5 m.
 - **Neck:** robot convention (degrees, + pan = head right, + tilt = head down),
   0 = straight ahead and level. No calibration file.
-- **Grippers:** both arms have one in the sim (the real left gripper is
-  removed); 1 = open, 0 = closed. The finger travel is a placeholder.
+- **Grippers:** 1 = open, 0 = closed. Default: the custom grippers on both
+  arms (finger travel is a placeholder). `--gripper agx` uses
+  `scene-full-agx.mjcf`, the stock AgileX parallel jaw on both arms (70 mm
+  stroke, the Piper gripper model), seated where the custom gripper sits; its
+  exact mount offset and jaw orientation on the real Nero are not measured. That
+  model is generated from `yor-full.mjcf` by
+  `robot/yor-description/make_agx_variant.py`; re-run it after regenerating
+  `yor-full.mjcf`.
 - **Video:** both eyes rendered at 960x540 from the model's ZED cameras (120 mm
   baseline, 70 deg vertical FOV) with matching `stereo_info`, ~22 fps on Windows.
 - **Not simulated:** navigation calls (`follow_path`, `move_to`, ...), wrist
@@ -127,6 +134,7 @@ logs button presses and what it sends.
 
 ```bash
 python robot/test_yor_mujoco.py          # drives the sim directly, headless
+python robot/test_yor_mujoco.py --gripper agx   # same, AgileX-gripper model
 python robot/test_yor_mujoco.py --rpc    # same checks against a running yor_mujoco.py
 python vr-teleop/tools/video_probe.py <ip>:8444   # video fps / frame size, like the headset sees it
 ```
