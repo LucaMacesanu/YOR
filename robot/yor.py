@@ -130,8 +130,13 @@ class YOR():
         self.base.start_control()
         time.sleep(0.5)
 
-        # No homing needed for Pico lift; ignore if present
+        # The lift is not homed automatically: driving it down at startup could put the
+        # arms into whatever is below them. Say so when it isn't (lift_home() homes it).
         time.sleep(0.5)
+        lift = self.base.get_lift_status()
+        if lift["ref"] is not None and not lift["homed"]:
+            print("[YOR] WARNING: lift NOT homed: lift_height is relative to where the Pico powered on. "
+                  "Clear the space below the arms and run lift_home (python robot/lift_home.py).")
 
         if self.neck is not None and self.neck.home_deg:
             try:
@@ -221,12 +226,25 @@ class YOR():
             self._lift_cmd = 0.0
 
     @require_initialization
-    def lift_home(self) -> None:
-        self.base.lift_home()
+    def lift_home(self) -> bool:
+        """Start homing the lift: up ~13 mm, then down until it stalls at the bottom stop
+        (up to ~32 s). Returns at once; False if already homing. Watch get_lift_status()."""
+        return self.base.lift_home()
 
     @require_initialization
-    def get_lift_height(self) -> float:
+    def get_lift_status(self) -> dict:
+        """{"homed", "ref", "homing", "home_error"}: see Base.get_lift_status."""
+        return self.base.get_lift_status()
+
+    @require_initialization
+    def get_lift_height(self):
+        """Measured lift height in m (Pico, polled at 50 Hz), or None when it is not a live reading."""
         return self.base.get_lift_height()
+
+    @require_initialization
+    def get_lift_height_error(self):
+        """Why get_lift_height() is None, or None when it is a live reading."""
+        return self.base.get_lift_height_error()
 
     @require_initialization
     def lift_delta_height(
@@ -535,10 +553,19 @@ class YOR():
         {side}_gripper_cmd the commanded one (None while the gripper is limp).
         enc_vel is body velocity [vx, vy, wz] from swerve forward kinematics on
         the measured wheel encoders. lift_cmd is the last manual lift command
-        (+1 up, -1 down, 0 stop); the measured height is get_lift_height().
+        (+1 up, -1 down, 0 stop); lift_height is the measured height in m (None when
+        the Pico reading drops, and lift_height_error then says why): travel above the
+        bottom stop when lift_homed, else relative to the Pico's power-on position;
+        lift_ref names which ("bottom_hard_stop" / "pico_power_on"), lift_homing is True
+        while lift_home runs.
         """
         state = {"timestamp": time.time(), "base_cmd_vel": np.asarray(
             self.base_controller.target_velocity, dtype=float).tolist(), "lift_cmd": self._lift_cmd}
+        state["lift_height"] = self.base.get_lift_height()
+        state["lift_height_error"] = None if state["lift_height"] is not None else (
+            self.base.get_lift_height_error() or "lift height not available")
+        lift = self.base.get_lift_status()
+        state.update(lift_homed=lift["homed"], lift_ref=lift["ref"], lift_homing=lift["homing"])
         state["enc_vel"] = self.base.get_measured_body_velocity()
         if self.neck is not None:
             try:

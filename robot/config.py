@@ -37,8 +37,14 @@ LIFT_ENABLED = os.environ.get("YOR_LIFT", "1") == "1"
 # LIFT_MAX_M keeps ~1 cm off the top stop.
 LIFT_MIN_M = 0.0
 LIFT_MAX_M = 0.66
+LIFT_TRAVEL_M = 0.6726  # bottom stop -> top stop
 LIFT_UP_RATE_MPS = 0.0265
 LIFT_DOWN_RATE_MPS = 0.0308
+
+# The lift encoder is incremental: the Pico zeroes it wherever the carriage is at
+# power-on. Heights are absolute only after the carriage has stalled against the
+# bottom hard stop (lift_home(), or driving down until it stops), which re-zeroes
+# the Pico; see PicoLift for how "homed" is tracked.
 
 # BaseController zeroes the base if no set_base_velocity() arrives within this
 # window (seconds), so a stopped or crashed teleop client can't leave it driving.

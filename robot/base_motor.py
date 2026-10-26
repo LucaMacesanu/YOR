@@ -11,7 +11,7 @@ import queue  # for queue.Empty / queue.Full
 
 from loop_rate_limiters import RateLimiter
 
-from .config import LIFT_ENABLED, LIFT_MAX_M, LIFT_MIN_M
+from .config import LIFT_ENABLED, LIFT_DOWN_RATE_MPS, LIFT_MAX_M, LIFT_MIN_M, LIFT_TRAVEL_M
 
 # --- New motor API ---
 from sparkcan_py import SparkFlex
@@ -84,7 +84,36 @@ def rad_to_frac(rad: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
 # Pico lift (serial)
 # ----------------------------
 class PicoLift:
+    """The Pico only reports height in reply to "status" ("[TAG] Height: <mm> mm | Count: <n> |
+    Limit:ON (grace <ms> ms)"), so a poll thread asks for it at POLL_HZ. get_height() is None
+    when the last reply is older than STALE_S, and height_error() then says why; no stale value
+    is served.
+
+    Homing. The encoder is incremental and the Pico zeroes it at power-on, wherever the
+    carriage is. The only fixed reference is the bottom hard stop (there are no limit
+    switches): the firmware (robot/lift_pico/main.py) stops the motor when encoder ticks stop
+    for 100 ms while driving, and a stall while driving down re-zeroes the height and reports
+    [MIN]. Each such re-zero seen here homes the lift, and is marked on the Pico itself by
+    setting its stall grace to HOMED_GRACE_MS (firmware default DEFAULT_GRACE_MS). The Pico
+    echoes the grace in every status line and loses it on any reset, so homed() is true
+    exactly while this Pico power cycle has been zeroed at the bottom stop: it survives
+    yor.py restarts and is gone after a Pico reset, power cycle or re-plug. A down-stall more
+    than BOTTOM_TOL_M above an existing home is an obstruction, not the stop: the Pico
+    re-zeroed in the wrong place, so that un-homes it.
+    """
+
     _HEIGHT_PATTERN = re.compile(r"Height:\s*(-?[\d.]+)\s*mm")
+    _STATUS_PATTERN = re.compile(r"\[(\w+)\]\s*Height:\s*(-?[\d.]+)\s*mm.*Limit:(ON|OFF) \(grace (\d+) ms")
+    POLL_HZ = 50.0  # same rate the 2026-10-23 lift profiling polled at
+    STALE_S = 0.5
+    DEFAULT_GRACE_MS = 100
+    HOMED_GRACE_MS = 101  # 1 ms more grace before the stall stop arms: no practical effect
+    BOTTOM_TOL_M = 0.01
+    HOME_BACKOFF_S = 0.5  # ~13 mm up before homing
+    HOME_NO_MOTION_S = 1.5
+    HOME_TIMEOUT_S = LIFT_TRAVEL_M / LIFT_DOWN_RATE_MPS + 10.0
+    REF_HOMED = "bottom_hard_stop"
+    REF_RAW = "pico_power_on"  # not homed: zero is wherever the carriage was at Pico power-on
 
     def __init__(
         self,
@@ -106,10 +135,24 @@ class PicoLift:
         self._drain_stop = threading.Event()
 
         self._height_m: Optional[float] = None
+        self._height_t = 0.0  # monotonic time of the last parsed height
+        self._tag: Optional[str] = None  # READY / MOVING / HOMING / MIN / MAX
+        self._limit_on: Optional[bool] = None
+        self._grace_ms: Optional[int] = None
+        self._bottom_seq = 0  # bottom-stop re-zeroes seen
+        self._bottom_ok = False  # the last one homed the lift (not an obstruction)
         self._height_lock = threading.Lock()
+
+        self._home_thread: Optional[threading.Thread] = None
+        self._home_cancel = threading.Event()
+        self._home_error: Optional[str] = None
 
         self._ensure_open()
         self._ensure_drain()
+        self._poll_thread = None
+        if serial is not None:
+            self._poll_thread = threading.Thread(target=self._poll_loop, daemon=True)
+            self._poll_thread.start()
 
     def _ensure_open(self) -> None:
         if serial is None:
@@ -159,12 +202,20 @@ class PicoLift:
                 if data:
                     try:
                         line = data.decode("utf-8").strip()
-                        print(f"[LIFT] {line}")
+                        status = self._STATUS_PATTERN.search(line)
                         match = self._HEIGHT_PATTERN.search(line)
-                        if match:
-                            height_mm = float(match.group(1))
+                        if status:  # 50 Hz status replies: parsed, not printed
+                            self._on_status(status.group(1), float(status.group(2)) / 1000.0,
+                                            status.group(3) == "ON", int(status.group(4)))
+                        elif match:
                             with self._height_lock:
-                                self._height_m = height_mm / 1000.0
+                                self._height_m = float(match.group(1)) / 1000.0
+                                self._height_t = time.monotonic()
+                        elif line:
+                            print(f"[LIFT] {line}")
+                            if "Lift CLI ready" in line:
+                                print("[PicoLift] Pico (re)started: lift height is relative to where it "
+                                      "powered on, NOT homed until it stalls at the bottom stop (lift_home)")
                     except Exception:
                         print(f"[LIFT] Raw: {data}")
 
@@ -176,6 +227,18 @@ class PicoLift:
                     pass
                 self._ser = None
                 time.sleep(0.1)
+
+    def _poll_loop(self) -> None:
+        period = 1.0 / self.POLL_HZ
+        while not self._drain_stop.is_set():
+            with self._lock:
+                ser = self._ser
+                if ser is not None:
+                    try:
+                        ser.write(b"status\n")
+                    except Exception:
+                        pass  # the drain loop notices a dead port and reopens it
+            time.sleep(period)
 
     def _send(self, cmd: str) -> None:
         if serial is None:
@@ -223,22 +286,141 @@ class PicoLift:
                     pass
                 self._ser = None
 
+    def _on_status(self, tag: str, height_m: float, limit_on: bool, grace_ms: int) -> None:
+        with self._height_lock:
+            prev_tag, prev_h = self._tag, self._height_m
+            self._height_m, self._height_t = height_m, time.monotonic()
+            self._tag, self._limit_on, self._grace_ms = tag, limit_on, grace_ms
+        if tag == "MIN" and prev_tag != "MIN":
+            self._on_bottom_stop(prev_h)
+
+    def _on_bottom_stop(self, prev_h: Optional[float]) -> None:
+        """The Pico just stalled driving down and re-zeroed. prev_h: the reading before."""
+        homed = self.homed()
+        if homed and prev_h is not None and prev_h > self.BOTTOM_TOL_M:
+            print(f"[PicoLift] WARNING: down-stall {prev_h * 1000:.0f} mm above the bottom stop "
+                  "(obstruction?). The Pico re-zeroed there: lift NOT homed, run lift_home")
+            self._send(f"grace {self.DEFAULT_GRACE_MS}")
+            self._bottom_ok = False
+        else:
+            was = "" if prev_h is None else (
+                f" (drift since the last home: {prev_h * 1000:+.1f} mm)" if homed else
+                f" (its zero was {-prev_h * 1000:.1f} mm above the stop)")
+            print(f"[PicoLift] Bottom stop: zeroed, lift homed{was}")
+            self._send(f"grace {self.HOMED_GRACE_MS}")
+            self._bottom_ok = True
+        self._bottom_seq += 1
+
     def up(self) -> None:
+        self._cancel_home()
         self._send("up")
 
     def down(self) -> None:
+        self._cancel_home()
         self._send("down")
 
-    def home(self) -> None:
-        self._send("home")
-
     def stop(self) -> None:
+        self._cancel_home()
         self._last_cmd = None
         self._send("stop")
 
-    def get_height(self) -> Optional[float]:
+    def home(self) -> bool:
+        """Start homing against the bottom stop in the background; False if already homing.
+        up()/down()/stop() cancel it. homing() / home_error() / homed() report how it went."""
+        if self.homing():
+            return False
+        self._home_cancel.clear()
+        self._home_error = None
+        self._home_thread = threading.Thread(target=self._home_run, daemon=True)
+        self._home_thread.start()
+        return True
+
+    def homing(self) -> bool:
+        return self._home_thread is not None and self._home_thread.is_alive()
+
+    def home_error(self) -> Optional[str]:
+        """Why the last lift_home failed, or None."""
+        return self._home_error
+
+    def _cancel_home(self) -> None:
+        if self.homing():
+            self._home_cancel.set()
+
+    def _home_run(self) -> None:
+        def wait(s):  # False once cancelled
+            return not self._home_cancel.wait(s)
+
+        try:
+            if self._limit_on is False:
+                raise RuntimeError("Pico stall stop is off ('limit on' needed to find the bottom stop)")
+            print("[PicoLift] Homing: back off up, then down until it stalls at the bottom stop")
+            # The Pico's stall stop only arms after an encoder tick, so "home" sent at the
+            # bottom stop would push into it until something sends stop. Backing off first
+            # makes the down run tick; it also proves the motor and encoder work.
+            self._send("up")
+            if not wait(self.HOME_BACKOFF_S):
+                return
+            self._send("stop")
+            if not wait(0.2):
+                return
+            h0, seq, t0 = self.get_height(), self._bottom_seq, time.monotonic()
+            self._send("home")
+            while self._bottom_seq == seq:
+                if not wait(0.02):
+                    return
+                elapsed, h = time.monotonic() - t0, self.get_height()
+                if elapsed > self.HOME_TIMEOUT_S:
+                    raise RuntimeError(f"no bottom stop after {elapsed:.0f} s")
+                if elapsed > self.HOME_NO_MOTION_S and None not in (h, h0) and abs(h - h0) < 0.001:
+                    raise RuntimeError("lift did not move (motor power?)")
+            if not self._bottom_ok:
+                raise RuntimeError("stalled going down above the bottom stop (obstruction?)")
+            t1 = time.monotonic()
+            while not self.homed():  # the Pico echoes the homed mark within a poll or two
+                if not wait(0.02):
+                    return
+                if time.monotonic() - t1 > 1.0:
+                    raise RuntimeError("the Pico did not take the homed mark (grace)")
+            print("[PicoLift] Homed: lift height is now travel above the bottom stop")
+        except Exception as e:
+            self._send("stop")
+            self._home_error = str(e)
+            print(f"[PicoLift] Homing FAILED: {e}")
+        finally:
+            if self._home_cancel.is_set():
+                self._home_error = "cancelled by a lift command"
+                print("[PicoLift] Homing cancelled by a lift command")
+
+    def homed(self) -> bool:
+        """True while the live reading is travel above the bottom stop (see class doc)."""
         with self._height_lock:
+            return (self._grace_ms == self.HOMED_GRACE_MS
+                    and time.monotonic() - self._height_t <= self.STALE_S)
+
+    def ref(self) -> str:
+        """What get_height() is measured from."""
+        return self.REF_HOMED if self.homed() else self.REF_RAW
+
+    def get_height(self) -> Optional[float]:
+        """Measured height in m, or None when height_error() is not None. Travel above the
+        bottom stop when homed(), else relative to where the Pico powered on."""
+        with self._height_lock:
+            if self._height_m is None or time.monotonic() - self._height_t > self.STALE_S:
+                return None
             return self._height_m
+
+    def height_error(self) -> Optional[str]:
+        if serial is None:
+            return "pyserial not installed"
+        if self._ser is None:
+            return f"lift serial {self.device_path} not open"
+        with self._height_lock:
+            if self._height_m is None:
+                return "no 'Height: ... mm' reply from the Pico"
+            age = time.monotonic() - self._height_t
+        if age > self.STALE_S:
+            return f"lift height stale ({age:.1f} s old)"
+        return None
 
 
 # ----------------------------
@@ -417,9 +599,11 @@ class Base:
         if self._pico_lift:
             self._pico_lift.down()
 
-    def lift_home(self) -> None:
+    def lift_home(self) -> bool:
+        """Start homing the lift against its bottom stop (background); False if not started."""
         if self._pico_lift:
-            self._pico_lift.home()
+            return self._pico_lift.home()
+        return False
 
     def lift_stop(self) -> None:
         if self._pico_lift:
@@ -429,6 +613,21 @@ class Base:
         if self._pico_lift:
             return self._pico_lift.get_height()
         return None
+
+    def get_lift_height_error(self) -> Optional[str]:
+        """Why get_lift_height() is None, or None when it is a live reading."""
+        if self._pico_lift is None:
+            return "lift disabled (YOR_LIFT=0)"
+        return self._pico_lift.height_error()
+
+    def get_lift_status(self) -> dict:
+        """homed: the height is travel above the bottom stop (ref names what it is measured
+        from); homing: lift_home is running; home_error: why the last lift_home failed."""
+        lift = self._pico_lift
+        if lift is None:
+            return {"homed": False, "ref": None, "homing": False, "home_error": None}
+        return {"homed": lift.homed(), "ref": lift.ref(), "homing": lift.homing(),
+                "home_error": lift.home_error()}
     
     def lift_delta_height(
         self,
@@ -483,6 +682,9 @@ class Base:
         # Clamp target
         target_m = float(max(min_height_m, min(max_height_m, float(target_m))))
 
+        if not self._pico_lift.homed():
+            print("[lift_to_height] Lift not homed (height is relative to Pico power-on); run lift_home first")
+            return False
         current_height = self._pico_lift.get_height()
         if current_height is None:
             print("[lift_to_height] Lift height unknown; cannot move to target")
