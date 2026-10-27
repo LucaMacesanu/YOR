@@ -19,6 +19,9 @@ VR_IP = os.environ.get("VR_IP", "192.168.123.227")
 
 EPISODE_PUB_HOST = os.environ.get("EPISODE_PUB_HOST", "*")
 EPISODE_PUB_PORT = int(os.environ.get("EPISODE_PUB_PORT", "5558"))
+# The Orin collector announces the selected cycle of subtasks here (collection/cycle);
+# whole_body_teleop.py subscribes to it. CYCLE_SOURCE=none turns cycles off.
+CYCLE_SOURCE = os.environ.get("CYCLE_SOURCE", f"{ORIN_IP}:5559")
 
 # ZED pose/image publisher host. The ZED is on the Orin, so default to it;
 # the Pi has no route to the old 192.168.1.x camera network.
@@ -45,6 +48,9 @@ LIFT_DOWN_RATE_MPS = 0.0308
 # power-on. Heights are absolute only after the carriage has stalled against the
 # bottom hard stop (lift_home(), or driving down until it stops), which re-zeroes
 # the Pico; see PicoLift for how "homed" is tracked.
+# yor.py homes the lift at startup when it isn't homed (i.e. after a Pico power-on);
+# YOR_LIFT_AUTOHOME=0 (or yor.py --no-lift-home) only warns instead.
+LIFT_AUTO_HOME = os.environ.get("YOR_LIFT_AUTOHOME", "1") == "1"
 
 # BaseController zeroes the base if no set_base_velocity() arrives within this
 # window (seconds), so a stopped or crashed teleop client can't leave it driving.

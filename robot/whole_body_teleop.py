@@ -19,7 +19,11 @@ Teleop starts OFF. Controls:
   B + Y (one per hand)        base mode on/off;  left stick drive, right stick turn
   head                  neck pan/tilt; straight ahead re-zeroes each time teleop turns on
   right stick click     episode start / end as success;  left stick click  end as fail
+                        (in a cycle from the Orin: success moves to the next subtask; left click
+                        with no episode open goes back one subtask)
   left stick (teleop off)  move the headset HUD up/down
+  right stick up/down   IPD;  left/right (teleop off)  view tilt: the robot looks that much further
+                        down (or up) than your head, so you don't crane your neck at a table
                         (teleop on or off, so policy rollouts can be marked too)
   trigger               that arm's AgileX gripper: 0 open .. full pull = closed
   A + Y (hold)          lift down;  X + B (hold) lift up;  release stops
@@ -37,6 +41,13 @@ frame in between, for the Orin collector. Each episode is also saved compressed 
 teleop_data/episodes/<episode_id>.yep (read: python vr-teleop/server/episode_store.py FILE).
 Don't run vr_teleop.py at the same time (same port).
 
+Cycles: when the Orin collector announces a cycle of subtasks on collection/cycle
+(CYCLE_SOURCE, default ORIN_IP:5559), each episode's task is the cycle's current subtask and
+the HUD shows it (k/n, READY / REC / RETRY); progress is kept in teleop_data/cycle_state.json.
+Format and click rules: vr-teleop/docs/EPISODE_FORMAT.md, "Cycles". Test without the Orin:
+python vr-teleop/tools/announce_cycle.py CYCLES.json NAME --bind 127.0.0.1:5559 with
+CYCLE_SOURCE=127.0.0.1:5559.
+
 Needs: aiohttp, mink (yor-nero env) and the openssl CLI (self-signed cert).
 """
 import os
@@ -47,7 +58,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "vr-teleop" / "server"))
 sys.path.insert(1, str(REPO))
 
-from robot.config import EPISODE_PUB_HOST, EPISODE_PUB_PORT, ORIN_IP  # noqa: E402
+from robot.config import CYCLE_SOURCE, EPISODE_PUB_HOST, EPISODE_PUB_PORT, ORIN_IP  # noqa: E402
 import yor_bridge  # noqa: E402  (vr-teleop/server/yor_bridge.py)
 
 if __name__ == "__main__":
@@ -57,4 +68,6 @@ if __name__ == "__main__":
         episode_host=EPISODE_PUB_HOST,
         episode_port=EPISODE_PUB_PORT,
         episode_dir=str(REPO / "teleop_data" / "episodes"),
+        cycle_source=CYCLE_SOURCE,
+        cycle_state=str(REPO / "teleop_data" / "cycle_state.json"),
     )

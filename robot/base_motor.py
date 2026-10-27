@@ -311,6 +311,15 @@ class PicoLift:
             self._bottom_ok = True
         self._bottom_seq += 1
 
+    def set_home_here(self) -> None:
+        """Declare where the carriage is now to be the bottom stop, without moving: the Pico
+        zeroes its height here and takes the homed mark. Only right when the carriage is
+        actually at the bottom stop (e.g. it was powered on there)."""
+        self._cancel_home()
+        print("[PicoLift] Home set here: zeroed at the current position, lift homed")
+        self._send("zero")
+        self._send(f"grace {self.HOMED_GRACE_MS}")
+
     def up(self) -> None:
         self._cancel_home()
         self._send("up")
@@ -608,6 +617,13 @@ class Base:
     def lift_stop(self) -> None:
         if self._pico_lift:
             self._pico_lift.stop()
+
+    def lift_set_home_here(self) -> bool:
+        """Mark the current lift position as the bottom stop (no motion); False with no lift."""
+        if self._pico_lift:
+            self._pico_lift.set_home_here()
+            return True
+        return False
 
     def get_lift_height(self) -> Optional[float]:
         if self._pico_lift:

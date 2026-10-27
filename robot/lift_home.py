@@ -8,6 +8,7 @@ Clear the space below the arms first. Ctrl+C stops the lift.
 Usage (from repo root, with robot/yor.py running):
   python robot/lift_home.py            # home, then print the reading
   python robot/lift_home.py --status   # just print height / homed / ref
+  python robot/lift_home.py --here     # no motion: the current position IS the bottom stop
 """
 import argparse
 import time
@@ -28,12 +29,20 @@ def main() -> int:
     ap.add_argument("--host", default="localhost")
     ap.add_argument("--port", type=int, default=5557)
     ap.add_argument("--status", action="store_true", help="print the lift status and exit (no motion)")
+    ap.add_argument("--here", action="store_true",
+                    help="no motion: mark the current position as the bottom stop (carriage must be there)")
     args = ap.parse_args()
 
     yor = RPCClient(args.host, args.port)
     if args.status:
         show(yor)
         return 0
+    if args.here:
+        if not yor.lift_set_home_here():
+            print("No lift")
+            return 1
+        time.sleep(0.5)  # the Pico's next status line carries the homed mark
+        return 0 if show(yor)["homed"] else 1
     if not yor.lift_home():
         print("A lift_home is already running")
     print("Homing (Ctrl+C stops the lift)...")

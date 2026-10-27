@@ -19,7 +19,7 @@ from robot.base import Base
 
 from robot.arm.arm import ArmNode
 from robot.base import BaseController
-from robot.config import LIFT_MAX_M, LIFT_MIN_M
+from robot.config import LIFT_AUTO_HOME, LIFT_MAX_M, LIFT_MIN_M
 from commlink import RPCServer, Subscriber
 import threading
 
@@ -65,8 +65,12 @@ class YOR():
         # Neck servo speed limits (STS units); None = robot/neck/neck.py defaults.
         neck_servo_speed: int | None = None,
         neck_servo_accel: int | None = None,
+        # Home the lift at init() when it isn't homed yet (only after a Pico power-on:
+        # the homed mark survives yor.py restarts). Default: robot/config.py LIFT_AUTO_HOME.
+        lift_auto_home: bool | None = None,
     ):
         self._initialized = False
+        self.lift_auto_home = LIFT_AUTO_HOME if lift_auto_home is None else lift_auto_home
         self._zed_initialized = False
 
         self.zed_sub = None
@@ -130,13 +134,17 @@ class YOR():
         self.base.start_control()
         time.sleep(0.5)
 
-        # The lift is not homed automatically: driving it down at startup could put the
-        # arms into whatever is below them. Say so when it isn't (lift_home() homes it).
+        # An unhomed lift (Pico power-on) is homed here, before the arms init and before the
+        # RPC server starts, so nothing else can command the lift while it runs. Homing drives
+        # the carriage down to the bottom stop: the space below the arms must be clear.
         time.sleep(0.5)
         lift = self.base.get_lift_status()
         if lift["ref"] is not None and not lift["homed"]:
-            print("[YOR] WARNING: lift NOT homed: lift_height is relative to where the Pico powered on. "
-                  "Clear the space below the arms and run lift_home (python robot/lift_home.py).")
+            if self.lift_auto_home:
+                self._auto_home_lift()
+            else:
+                print("[YOR] WARNING: lift NOT homed: lift_height is relative to where the Pico powered on. "
+                      "Clear the space below the arms and run lift_home (python robot/lift_home.py).")
 
         if self.neck is not None and self.neck.home_deg:
             try:
@@ -224,6 +232,34 @@ class YOR():
         if hasattr(self.base, "lift_stop"):
             self.base.lift_stop()
             self._lift_cmd = 0.0
+
+    def _auto_home_lift(self) -> None:
+        """init(): home the lift and wait (up to ~32 s). Ctrl+C stops the lift; a failed home
+        only warns, so the robot still comes up (with relative lift heights)."""
+        print("[YOR] Lift not homed: homing it now (down to the bottom stop; Ctrl+C stops it, "
+              "--no-lift-home / YOR_LIFT_AUTOHOME=0 skips this)")
+        if not self.base.lift_home():
+            print("[YOR] Lift homing already running")
+        try:
+            time.sleep(0.2)
+            while self.base.get_lift_status()["homing"]:
+                time.sleep(0.2)
+        except KeyboardInterrupt:
+            self.base.lift_stop()
+            print("[YOR] Lift homing interrupted: lift stopped, NOT homed")
+            raise
+        st = self.base.get_lift_status()
+        if st["homed"]:
+            print(f"[YOR] Lift homed: height {self.base.get_lift_height()} m above the bottom stop")
+        else:
+            print(f"[YOR] WARNING: lift homing FAILED ({st['home_error']}): lift_height stays relative to "
+                  "where the Pico powered on. Fix it and run python robot/lift_home.py.")
+
+    @require_initialization
+    def lift_set_home_here(self) -> bool:
+        """Mark the lift's current position as the bottom stop (height 0, homed) without moving.
+        Only use it when the carriage really is at the bottom stop."""
+        return self.base.lift_set_home_here()
 
     @require_initialization
     def lift_home(self) -> bool:
@@ -696,11 +732,14 @@ def main():
                         help='Neck servo max speed, steps/s (4096/rev; default 2000 ~ 175 deg/s; 0 = no limit)')
     parser.add_argument('--neck-servo-accel', type=int, default=None,
                         help='Neck servo acceleration, 0-254 in 100 steps/s^2 (default 80; 0 = no limit)')
+    parser.add_argument('--no-lift-home', action='store_true',
+                        help="don't home the lift at startup when it isn't homed (env YOR_LIFT_AUTOHOME=0)")
     args = parser.parse_args()
 
     yor = YOR(no_arms=args.no_arms, no_gripper=args.no_gripper,
               samehand_gripper=args.samehand, no_neck=args.no_neck,
-              neck_servo_speed=args.neck_servo_speed, neck_servo_accel=args.neck_servo_accel)
+              neck_servo_speed=args.neck_servo_speed, neck_servo_accel=args.neck_servo_accel,
+              lift_auto_home=False if args.no_lift_home else None)
     yor.init()
     server = RPCServer(yor, port=YOR_PORT, threaded=True)
 
