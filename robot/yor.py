@@ -19,7 +19,7 @@ from robot.base import Base
 
 from robot.arm.arm import ArmNode
 from robot.base import BaseController
-from robot.config import LIFT_AUTO_HOME, LIFT_MAX_M, LIFT_MIN_M
+from robot.config import LIFT_AUTO_HOME, LIFT_HOME_M, LIFT_MAX_M, LIFT_MIN_M
 from commlink import RPCServer, Subscriber
 import threading
 
@@ -134,18 +134,6 @@ class YOR():
         self.base.start_control()
         time.sleep(0.5)
 
-        # An unhomed lift (Pico power-on) is homed here, before the arms init and before the
-        # RPC server starts, so nothing else can command the lift while it runs. Homing drives
-        # the carriage down to the bottom stop: the space below the arms must be clear.
-        time.sleep(0.5)
-        lift = self.base.get_lift_status()
-        if lift["ref"] is not None and not lift["homed"]:
-            if self.lift_auto_home:
-                self._auto_home_lift()
-            else:
-                print("[YOR] WARNING: lift NOT homed: lift_height is relative to where the Pico powered on. "
-                      "Clear the space below the arms and run lift_home (python robot/lift_home.py).")
-
         if self.neck is not None and self.neck.home_deg:
             try:
                 reached = self.neck.go_home()
@@ -158,6 +146,22 @@ class YOR():
         if not self.no_arms:
             self.left_arm.init()
             self.right_arm.init()
+
+        # An unhomed lift (Pico power-on) is homed here: after the arms are at their home pose
+        # (at power-on they enable holding whatever pose they hang in, e.g. pointing down) and
+        # before the RPC server starts, so nothing else can command the lift while it runs.
+        # Homing drives the carriage ~15 mm down, then up to the top stop.
+        time.sleep(0.5)
+        lift = self.base.get_lift_status()
+        if lift["ref"] is not None and not lift["homed"]:
+            if self.lift_auto_home:
+                self._auto_home_lift()
+            else:
+                print("[YOR] WARNING: lift NOT homed: lift_height is relative to where the Pico powered on. "
+                      "Run lift_home (python robot/lift_home.py).")
+        # Every start parks a homed lift at LIFT_HOME_M (an unhomed one stays put).
+        if self.base.get_lift_status()["homed"]:
+            self._park_lift()
 
         self._initialized = True
 
@@ -234,9 +238,9 @@ class YOR():
             self._lift_cmd = 0.0
 
     def _auto_home_lift(self) -> None:
-        """init(): home the lift and wait (up to ~32 s). Ctrl+C stops the lift; a failed home
+        """init(): home the lift and wait (up to ~36 s). Ctrl+C stops the lift; a failed home
         only warns, so the robot still comes up (with relative lift heights)."""
-        print("[YOR] Lift not homed: homing it now (down to the bottom stop; Ctrl+C stops it, "
+        print("[YOR] Lift not homed: homing it now (up to the top stop; Ctrl+C stops it, "
               "--no-lift-home / YOR_LIFT_AUTOHOME=0 skips this)")
         if not self.base.lift_home():
             print("[YOR] Lift homing already running")
@@ -255,6 +259,20 @@ class YOR():
             print(f"[YOR] WARNING: lift homing FAILED ({st['home_error']}): lift_height stays relative to "
                   "where the Pico powered on. Fix it and run python robot/lift_home.py.")
 
+    def _park_lift(self) -> None:
+        """init(): move the homed lift to LIFT_HOME_M (blocking). Ctrl+C stops the lift."""
+        print(f"[YOR] Lift: moving to its home height {LIFT_HOME_M:.3f} m "
+              f"(from {self.base.get_lift_height()} m)")
+        try:
+            reached = self.base.lift_to_height(LIFT_HOME_M)
+        except KeyboardInterrupt:
+            self.base.lift_stop()
+            print("[YOR] Lift move interrupted: lift stopped (still homed)")
+            raise
+        if not reached:
+            print(f"[YOR] WARNING: lift did not reach {LIFT_HOME_M:.3f} m "
+                  f"(at {self.base.get_lift_height()} m)")
+
     @require_initialization
     def lift_set_home_here(self) -> bool:
         """Mark the lift's current position as the bottom stop (height 0, homed) without moving.
@@ -263,8 +281,8 @@ class YOR():
 
     @require_initialization
     def lift_home(self) -> bool:
-        """Start homing the lift: up ~13 mm, then down until it stalls at the bottom stop
-        (up to ~32 s). Returns at once; False if already homing. Watch get_lift_status()."""
+        """Start homing the lift: down ~15 mm, then up until it stalls at the top stop
+        (up to ~36 s). Returns at once; False if already homing. Watch get_lift_status()."""
         return self.base.lift_home()
 
     @require_initialization

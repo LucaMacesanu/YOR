@@ -2,8 +2,9 @@
 Home the lift through the running robot/yor.py, so lift_height becomes absolute:
 carriage travel in metres above the bottom hard stop (0 = fully down, up is +).
 
-The lift goes up ~13 mm, then down until it stalls at the bottom stop (up to ~32 s).
-Clear the space below the arms first. Ctrl+C stops the lift.
+The lift goes down ~15 mm, then up until it stalls at the top stop (up to ~36 s), where
+its height is set to LIFT_TRAVEL_M, then to its home height (LIFT_HOME_M). Clear the space
+above the arms first. Ctrl+C stops the lift.
 
 Usage (from repo root, with robot/yor.py running):
   python robot/lift_home.py            # home, then print the reading
@@ -14,6 +15,8 @@ import argparse
 import time
 
 from commlink import RPCClient
+
+from robot.config import LIFT_HOME_M
 
 
 def show(yor):
@@ -50,6 +53,10 @@ def main() -> int:
         time.sleep(0.2)
         while yor.get_lift_status()["homing"]:
             time.sleep(0.2)
+        if yor.get_lift_status()["homed"]:
+            print(f"Homed; moving to the home height ({LIFT_HOME_M:.3f} m)...")
+            if not yor.lift_to_height(LIFT_HOME_M):
+                print("Did not reach the home height")
     except KeyboardInterrupt:
         yor.lift_stop()
         print("\nStopped")

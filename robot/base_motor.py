@@ -11,7 +11,7 @@ import queue  # for queue.Empty / queue.Full
 
 from loop_rate_limiters import RateLimiter
 
-from .config import LIFT_ENABLED, LIFT_DOWN_RATE_MPS, LIFT_MAX_M, LIFT_MIN_M, LIFT_TRAVEL_M
+from .config import LIFT_ENABLED, LIFT_MAX_M, LIFT_MIN_M, LIFT_TRAVEL_M, LIFT_UP_RATE_MPS
 
 # --- New motor API ---
 from sparkcan_py import SparkFlex
@@ -100,6 +100,11 @@ class PicoLift:
     yor.py restarts and is gone after a Pico reset, power cycle or re-plug. A down-stall more
     than BOTTOM_TOL_M above an existing home is an obstruction, not the stop: the Pico
     re-zeroed in the wrong place, so that un-homes it.
+
+    home() uses the top stop instead, so the carriage moves away from whatever is below the
+    arms: up until it stalls (the Pico stops there and reports [MAX] without re-zeroing), then
+    the height is set to LIFT_TRAVEL_M and the homed mark taken. Heights stay travel above the
+    bottom stop, as accurate as LIFT_TRAVEL_M; a later bottom-stop stall reports the drift.
     """
 
     _HEIGHT_PATTERN = re.compile(r"Height:\s*(-?[\d.]+)\s*mm")
@@ -109,9 +114,10 @@ class PicoLift:
     DEFAULT_GRACE_MS = 100
     HOMED_GRACE_MS = 101  # 1 ms more grace before the stall stop arms: no practical effect
     BOTTOM_TOL_M = 0.01
-    HOME_BACKOFF_S = 0.5  # ~13 mm up before homing
+    TOP_TOL_M = 0.01
+    HOME_BACKOFF_S = 0.5  # ~15 mm down before homing
     HOME_NO_MOTION_S = 1.5
-    HOME_TIMEOUT_S = LIFT_TRAVEL_M / LIFT_DOWN_RATE_MPS + 10.0
+    HOME_TIMEOUT_S = LIFT_TRAVEL_M / LIFT_UP_RATE_MPS + 10.0
     REF_HOMED = "bottom_hard_stop"
     REF_RAW = "pico_power_on"  # not homed: zero is wherever the carriage was at Pico power-on
 
@@ -141,6 +147,7 @@ class PicoLift:
         self._grace_ms: Optional[int] = None
         self._bottom_seq = 0  # bottom-stop re-zeroes seen
         self._bottom_ok = False  # the last one homed the lift (not an obstruction)
+        self._top_seq = 0  # up-stalls seen ([MAX])
         self._height_lock = threading.Lock()
 
         self._home_thread: Optional[threading.Thread] = None
@@ -215,7 +222,7 @@ class PicoLift:
                             print(f"[LIFT] {line}")
                             if "Lift CLI ready" in line:
                                 print("[PicoLift] Pico (re)started: lift height is relative to where it "
-                                      "powered on, NOT homed until it stalls at the bottom stop (lift_home)")
+                                      "powered on, NOT homed until lift_home (or a stall at the bottom stop)")
                     except Exception:
                         print(f"[LIFT] Raw: {data}")
 
@@ -293,6 +300,8 @@ class PicoLift:
             self._tag, self._limit_on, self._grace_ms = tag, limit_on, grace_ms
         if tag == "MIN" and prev_tag != "MIN":
             self._on_bottom_stop(prev_h)
+        if tag == "MAX" and prev_tag != "MAX":
+            self._top_seq += 1
 
     def _on_bottom_stop(self, prev_h: Optional[float]) -> None:
         """The Pico just stalled driving down and re-zeroed. prev_h: the reading before."""
@@ -334,7 +343,7 @@ class PicoLift:
         self._send("stop")
 
     def home(self) -> bool:
-        """Start homing against the bottom stop in the background; False if already homing.
+        """Start homing against the top stop in the background; False if already homing.
         up()/down()/stop() cancel it. homing() / home_error() / homed() report how it went."""
         if self.homing():
             return False
@@ -361,35 +370,43 @@ class PicoLift:
 
         try:
             if self._limit_on is False:
-                raise RuntimeError("Pico stall stop is off ('limit on' needed to find the bottom stop)")
-            print("[PicoLift] Homing: back off up, then down until it stalls at the bottom stop")
-            # The Pico's stall stop only arms after an encoder tick, so "home" sent at the
-            # bottom stop would push into it until something sends stop. Backing off first
-            # makes the down run tick; it also proves the motor and encoder work.
-            self._send("up")
+                raise RuntimeError("Pico stall stop is off ('limit on' needed to find the top stop)")
+            print("[PicoLift] Homing: back off down, then up until it stalls at the top stop")
+            # The Pico's stall stop only arms after an encoder tick, so "up" sent at the top
+            # stop would push into it until something sends stop. Backing off first makes the
+            # up run tick; it also proves the motor and encoder work.
+            was_homed = self.homed()
+            self._send("down")
             if not wait(self.HOME_BACKOFF_S):
                 return
             self._send("stop")
             if not wait(0.2):
                 return
-            h0, seq, t0 = self.get_height(), self._bottom_seq, time.monotonic()
-            self._send("home")
-            while self._bottom_seq == seq:
+            h0, seq, t0 = self.get_height(), self._top_seq, time.monotonic()
+            self._send("up")
+            while self._top_seq == seq:
                 if not wait(0.02):
                     return
                 elapsed, h = time.monotonic() - t0, self.get_height()
                 if elapsed > self.HOME_TIMEOUT_S:
-                    raise RuntimeError(f"no bottom stop after {elapsed:.0f} s")
+                    raise RuntimeError(f"no top stop after {elapsed:.0f} s")
                 if elapsed > self.HOME_NO_MOTION_S and None not in (h, h0) and abs(h - h0) < 0.001:
                     raise RuntimeError("lift did not move (motor power?)")
-            if not self._bottom_ok:
-                raise RuntimeError("stalled going down above the bottom stop (obstruction?)")
+            h = self.get_height()
+            if was_homed and h is not None and h < LIFT_TRAVEL_M - self.TOP_TOL_M:
+                raise RuntimeError(f"stalled going up {(LIFT_TRAVEL_M - h) * 1000:.0f} mm below "
+                                   "the top stop (obstruction?)")
+            if was_homed and h is not None:
+                print(f"[PicoLift] Top stop: drift since the last home {(h - LIFT_TRAVEL_M) * 1000:+.1f} mm")
+            self._send(f"set {LIFT_TRAVEL_M * 1000:.2f}")
+            self._send(f"grace {self.HOMED_GRACE_MS}")
             t1 = time.monotonic()
-            while not self.homed():  # the Pico echoes the homed mark within a poll or two
+            # the Pico echoes the new height and the homed mark within a poll or two
+            while not (self.homed() and abs((self.get_height() or 0.0) - LIFT_TRAVEL_M) < 0.001):
                 if not wait(0.02):
                     return
                 if time.monotonic() - t1 > 1.0:
-                    raise RuntimeError("the Pico did not take the homed mark (grace)")
+                    raise RuntimeError("the Pico did not take the top-stop height / homed mark")
             print("[PicoLift] Homed: lift height is now travel above the bottom stop")
         except Exception as e:
             self._send("stop")
@@ -609,7 +626,7 @@ class Base:
             self._pico_lift.down()
 
     def lift_home(self) -> bool:
-        """Start homing the lift against its bottom stop (background); False if not started."""
+        """Start homing the lift against its top stop (background); False if not started."""
         if self._pico_lift:
             return self._pico_lift.home()
         return False

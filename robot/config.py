@@ -41,13 +41,15 @@ LIFT_ENABLED = os.environ.get("YOR_LIFT", "1") == "1"
 LIFT_MIN_M = 0.0
 LIFT_MAX_M = 0.66
 LIFT_TRAVEL_M = 0.6726  # bottom stop -> top stop
+LIFT_HOME_M = 0.648  # where yor.py parks the (homed) lift at every start; set 2026-10-27
 LIFT_UP_RATE_MPS = 0.0265
 LIFT_DOWN_RATE_MPS = 0.0308
 
 # The lift encoder is incremental: the Pico zeroes it wherever the carriage is at
-# power-on. Heights are absolute only after the carriage has stalled against the
-# bottom hard stop (lift_home(), or driving down until it stops), which re-zeroes
-# the Pico; see PicoLift for how "homed" is tracked.
+# power-on. Heights (travel above the bottom stop) are absolute only after
+# lift_home() (up to the top stop, height set to LIFT_TRAVEL_M) or a stall against
+# the bottom hard stop (driving down until it stops), which re-zeroes the Pico; see
+# PicoLift for how "homed" is tracked.
 # yor.py homes the lift at startup when it isn't homed (i.e. after a Pico power-on);
 # YOR_LIFT_AUTOHOME=0 (or yor.py --no-lift-home) only warns instead.
 LIFT_AUTO_HOME = os.environ.get("YOR_LIFT_AUTOHOME", "1") == "1"

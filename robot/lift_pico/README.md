@@ -11,6 +11,8 @@ What `robot/base_motor.py`'s `PicoLift` relies on:
 - No limit switches. With `limit on` (the default) the motor stops when encoder ticks stop
   for 100 ms while driving. That stop only arms after the first tick of a move. A stall while
   driving down re-zeroes the height and reports `[MIN]`. `home` is "down until that stall".
+  A stall while driving up only stops and reports `[MAX]`; `PicoLift.home()` homes there (it
+  drives `up`, not `home`) and writes the height with `set <mm>`.
 - `grace <ms>` is echoed in every status line and resets to 100 at boot. `PicoLift` sets it to
   101 to mark "zeroed at the bottom stop since this boot" (see its docstring).
 
