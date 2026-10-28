@@ -20,3 +20,8 @@ teleop_data/
 
 # Vendored upstream checkout (github.com/agilexrobotics/pyAgxArm)
 pyAgxArm/
+
+# local scratch / notes
+/test_pub.py
+/test_sub.py
+/vr_teleop_updates.md
